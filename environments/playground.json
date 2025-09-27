@@ -1,6 +1,6 @@
 {
     "name": "Playground environment",
-    "wind_min_speed": 10,
+    "wind_min_speed": 2,
     "wind_max_speed": 10,
     "wind_max_delta_percent": 0,
     "wind_gust_probability": 0,

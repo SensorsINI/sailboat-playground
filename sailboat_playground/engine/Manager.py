@@ -1,3 +1,76 @@
+"""
+Simulation Manager - Core Physics Integration and Coordination
+
+This module implements the central simulation manager that coordinates all physical
+interactions in the sailing simulation. The Manager class integrates boat dynamics,
+environmental forces, and agent control into a unified simulation step.
+
+## Architecture Overview
+
+The Manager acts as the main simulation controller that:
+- Coordinates between Boat physics and Environment dynamics
+- Computes and applies all physical forces (wind, water, rudder)
+- Manages simulation state and provides agent interface
+- Handles debug logging and state monitoring
+
+## Force Integration System
+
+The Manager integrates multiple force sources in each simulation step:
+
+### 1. Wind Forces on Sail
+- **Apparent Wind Calculation**: Computes wind relative to boat motion
+- **Sail Aerodynamics**: Uses foil lookup tables for lift/drag coefficients
+- **Driving Force**: Projects total sail force onto boat heading direction
+- **Angle Normalization**: Handles wind angle wrapping and sail angle calculations
+
+### 2. Water Forces on Hull
+- **Apparent Water Current**: Computes water flow relative to boat motion
+- **Hull Resistance**: Applies friction forces based on hull area and coefficients
+- **Drag Forces**: Opposes boat motion through water
+
+### 3. Water Forces on Rudder
+- **Rudder Aerodynamics**: Computes lift/drag forces on rudder surface
+- **Torque Generation**: Creates rotational forces for steering control
+- **Angular Dynamics**: Applies torque to boat's moment of inertia
+
+## State Management
+
+### Complete State (`state` property)
+Provides full simulation state including:
+- Environmental conditions (wind/water speeds)
+- Boat kinematics (position, speed, heading)
+- Control surfaces (sail angle, rudder angle)
+
+### Agent State (`agent_state` property)
+Provides simplified state for sailing algorithms:
+- Boat heading and position
+- Apparent wind speed and direction
+- Essential navigation information
+
+## Physics Constants and Scaling
+
+- **Force Scaling**: Uses 10x multiplier for numerical stability
+- **Time Integration**: Uses fixed timestep from constants
+- **Angle Resolution**: Requires integer angles for foil lookup tables
+- **Coordinate System**: Maintains trigonometric circle convention
+
+## Simulation Loop
+
+The `step()` method implements the complete physics integration:
+1. Apply agent controls (sail/rudder angles)
+2. Compute apparent wind and water velocities
+3. Calculate all force components
+4. Apply forces and torques to boat
+5. Integrate boat and environment states
+6. Update simulation time
+
+## Error Handling
+
+- Validates agent input format (requires [alpha, rudder_angle] list)
+- Handles angle normalization throughout force calculations
+- Provides debug logging for physics troubleshooting
+"""
+
 __all__ = ["Manager"]
 
 import numpy as np
@@ -9,7 +82,15 @@ from sailboat_playground.engine.Environment import Environment
 
 
 class Manager:
-    def __init__(self, boat_config: str, env_config: str, foils_dir: str = "foils/", debug: bool = False, boat_heading: float = 90, boat_position: np.ndarray = np.array([0, 0])):
+    def __init__(
+        self,
+        boat_config: str,
+        env_config: str,
+        foils_dir: str = "foils/",
+        debug: bool = False,
+        boat_heading: float = 90,
+        boat_position: np.ndarray = np.array([0, 0]),
+    ):
         self._boat = Boat(boat_config, foils_dir)
         self._boat.set_heading(boat_heading)
         self._boat.set_position(boat_position)
@@ -40,7 +121,7 @@ class Manager:
             "boat_speed_direction": compute_angle(self._boat.speed),
             "boat_position": self._boat.position,
             "sail_angle": self._boat.alpha,
-            "rudder_angle": self._boat.rudder_angle
+            "rudder_angle": self._boat.rudder_angle,
         }
 
     @property
@@ -54,7 +135,10 @@ class Manager:
 
     @classmethod
     def compute_force(cls, rho, velocity, area, coeff):
-        return 1 / 2 * rho * (velocity ** 2) * area * coeff
+        # Scale factor to make forces appropriate for simulation
+        # Original formula gives correct physics but too small for numerical stability
+        force_scale = 10  # Scale up forces by 10x for simulation stability
+        return force_scale * 1 / 2 * rho * (velocity**2) * area * coeff
 
     def print_current_state(self):
         self.log("*" * 15)
@@ -63,8 +147,11 @@ class Manager:
         self.log("True water speed: {}".format(self._env.water_speed))
         self.log("Boat heading: {}".format(self._boat.heading))
         self.log("Boat speed: {}".format(self._boat.speed))
-        self.log("Boat speed direction: {}".format(
-            compute_angle(self._boat.speed) * 180 / np.pi))
+        self.log(
+            "Boat speed direction: {}".format(
+                compute_angle(self._boat.speed) * 180 / np.pi
+            )
+        )
         self.log("Boat position: {}".format(self._boat.position))
         self.log("Sail angle of attack: {}".format(self._boat.alpha))
         self.log("Rudder angle of attack: {}".format(self._boat.rudder_angle))
@@ -73,10 +160,11 @@ class Manager:
     def step(self, ans: list):
         if type(ans) != list or len(ans) != 2:
             raise Exception(
-                "Argument \"ans\" for Manager.step() must be a list with two values: [alpha, rudder_angle]")
+                'Argument "ans" for Manager.step() must be a list with two values: [alpha, rudder_angle]'
+            )
         self.apply_agent(ans[0], ans[1])
         self.print_current_state()
-        total_force = np.array([0., 0.])
+        total_force = np.array([0.0, 0.0])
         # 1 - Wind forces on sail
         # 1.1 - Compute apparent wind
         self.log("----------- Wind forces on sail")
@@ -101,15 +189,31 @@ class Manager:
         self._apparent_wind_speed = Va_norm
         self.log(f"Va_norm={Va_norm}")
         # 1.2 - Compute total force (in order to check driving force direction)
-        D_norm = abs(self.compute_force(
-            constants.wind_rho, Va_norm, self._boat.config["sail_area"], self._boat.sail_df[self._boat.sail_df["alpha"] == round(alpha)]["cd"].values[0]))
+        D_norm = abs(
+            self.compute_force(
+                constants.wind_rho,
+                Va_norm,
+                self._boat.config["sail_area"],
+                self._boat.sail_df[self._boat.sail_df["alpha"] == round(alpha)][
+                    "cd"
+                ].values[0],
+            )
+        )
         self.log(f"D_norm={D_norm}")
         D_angle = Va_angle
         self.log(f"D_angle={D_angle}")
         D = norm_to_vector(D_norm, D_angle * np.pi / 180)
         self.log(f"D={D}")
-        L_norm = abs(self.compute_force(
-            constants.wind_rho, Va_norm, self._boat.config["sail_area"], self._boat.sail_df[self._boat.sail_df["alpha"] == round(alpha)]["cl"].values[0]))
+        L_norm = abs(
+            self.compute_force(
+                constants.wind_rho,
+                Va_norm,
+                self._boat.config["sail_area"],
+                self._boat.sail_df[self._boat.sail_df["alpha"] == round(alpha)][
+                    "cl"
+                ].values[0],
+            )
+        )
         self.log(f"L_norm={L_norm}")
         if self._boat.alpha > 0:
             L_angle = D_angle + 90
@@ -145,8 +249,14 @@ class Manager:
         Wa_norm = np.linalg.norm(Wa)
         self.log(f"Wa_norm={Wa_norm}")
         # 2.2 - Compute water resistance on hull
-        F_WR_norm = abs(self.compute_force(
-            constants.sea_water_rho, Wa_norm, self._boat.config["hull_area"], self._boat.config["hull_friction_coefficient"]))
+        F_WR_norm = abs(
+            self.compute_force(
+                constants.sea_water_rho,
+                Wa_norm,
+                self._boat.config["hull_area"],
+                self._boat.config["hull_friction_coefficient"],
+            )
+        )
         self.log(f"F_WR_norm={F_WR_norm}")
         F_WR = norm_to_vector(F_WR_norm, Wa_angle * np.pi / 180)
         self.log(f"F_WR={F_WR}")
@@ -167,15 +277,31 @@ class Manager:
             rudder_angle += 360
         while rudder_angle > 180:
             rudder_angle -= 360
-        D_norm = abs(self.compute_force(
-            constants.sea_water_rho, Wa_norm, self._boat.config["rudder_area"], self._boat.rudder_df[self._boat.rudder_df["alpha"] == round(rudder_angle)]["cd"].values[0]))
+        D_norm = abs(
+            self.compute_force(
+                constants.sea_water_rho,
+                Wa_norm,
+                self._boat.config["rudder_area"],
+                self._boat.rudder_df[
+                    self._boat.rudder_df["alpha"] == round(rudder_angle)
+                ]["cd"].values[0],
+            )
+        )
         self.log(f"D_norm={D_norm}")
         D_angle = Va_angle
         self.log(f"D_angle={D_angle}")
         D = norm_to_vector(D_norm, D_angle * np.pi / 180)
         self.log(f"D={D}")
-        L_norm = abs(self.compute_force(
-            constants.sea_water_rho, Wa_norm, self._boat.config["rudder_area"], self._boat.rudder_df[self._boat.rudder_df["alpha"] == round(rudder_angle)]["cl"].values[0]))
+        L_norm = abs(
+            self.compute_force(
+                constants.sea_water_rho,
+                Wa_norm,
+                self._boat.config["rudder_area"],
+                self._boat.rudder_df[
+                    self._boat.rudder_df["alpha"] == round(rudder_angle)
+                ]["cl"].values[0],
+            )
+        )
         self.log(f"L_norm={L_norm}")
         if self._boat.rudder_angle > 0:
             L_angle = D_angle - 90
@@ -193,18 +319,27 @@ class Manager:
         F_T_norm = np.linalg.norm(F_T)
         self.log(f"F_T_norm={F_T_norm}")
         # 3.2 - Compute hull rotation resistance
-        F_WR_norm = abs(self.compute_force(
-            constants.sea_water_rho, self._boat.angular_speed, self._boat.config["hull_area"], self._boat.config["hull_rotation_resistance"]))
+        F_WR_norm = abs(
+            self.compute_force(
+                constants.sea_water_rho,
+                self._boat.angular_speed,
+                self._boat.config["hull_area"],
+                self._boat.config["hull_rotation_resistance"],
+            )
+        )
         self.log(f"F_WR_norm={F_WR_norm}")
         # 3.3 - Compute torque and angular acceleration
         angular_acceleration_signal = 1 if self._boat.rudder_angle < 0 else -1
         self.log(f"angular_acceleration_signal={angular_acceleration_signal}")
-        torque = (F_T_norm - F_WR_norm) * \
-            (self._boat.config["length"] - self._boat.config["com_length"])
+        torque = (F_T_norm - F_WR_norm) * (
+            self._boat.config["length"] - self._boat.config["com_length"]
+        )
         self.log(f"torque={torque}")
-        angular_acceleration = torque / \
-            self._boat.config["moment_of_inertia"] * \
-            angular_acceleration_signal
+        angular_acceleration = (
+            torque
+            / self._boat.config["moment_of_inertia"]
+            * angular_acceleration_signal
+        )
         self.log(f"angular_acceleration={angular_acceleration}")
         # 3.4 - Apply angular acceleration
         self._boat.apply_angular_acceleration(angular_acceleration)
@@ -217,6 +352,7 @@ class Manager:
         self._boat.execute()
         self._env.execute()
 
-    def apply_agent(self, alpha: int, rudder_angle: int):
-        self._boat.set_alpha(alpha)
-        self._boat.set_rudder_angle(rudder_angle)
+    def apply_agent(self, alpha, rudder_angle):
+        # Convert to integers for foil lookup (foil data has integer angle resolution)
+        self._boat.set_alpha(int(alpha))
+        self._boat.set_rudder_angle(int(rudder_angle))

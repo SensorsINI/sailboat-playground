@@ -1,10 +1,7 @@
 from setuptools import setup, find_packages
-# Removed Cython compilation - running as pure Python
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
-
-# No Cython extensions - running as pure Python
 
 setup(
     name="sailboat_playground",
@@ -26,6 +23,7 @@ setup(
         "autonomous navigation",
     ],
     install_requires=[
+        "cython",
         "numpy",
         "pyglet==1.5.17",
         "pandas",
@@ -40,5 +38,4 @@ setup(
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
     ],
-    # No Cython extensions - running as pure Python
 )

@@ -14,15 +14,13 @@ if __name__ == "__main__":
     stop = False
     steps = 0
     m = Manager(
-        "boats/sample_boat.json",
-        "environments/playground.json",
-        boat_heading=270
+        "boats/sample_boat.json", "environments/playground.json", boat_heading=270
     )
     while not stop and steps < 3000:
         state = m.agent_state
         if state["position"][1] <= -410:
             stop = True
-        m.step([70, get_rudder_angle(state["heading"], 270)])
+        m.step([70, int(get_rudder_angle(state["heading"], 270))])
         state = m.state
         state_list.append(state)
         steps += 1

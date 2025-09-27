@@ -1,10 +1,96 @@
+"""
+Sailboat Physics Model and State Management
+
+This module implements the core physics model for a sailboat in the sailing simulation.
+The Boat class manages the boat's physical state, aerodynamic properties, and dynamics.
+
+## Model Structure
+
+The Boat class represents a sailboat with the following components:
+- **Sail**: Primary propulsion foil with configurable aerodynamic properties
+- **Rudder**: Control surface for steering with separate aerodynamic characteristics
+- **Hull**: Main body with mass and physical properties
+
+## Physical State Variables
+
+The boat maintains the following state variables:
+
+### Position and Orientation
+- `_position`: 2D position vector [x, y] in meters (Cartesian coordinates)
+- `_heading`: Boat orientation in degrees (0° = East, 90° = North, 180° = West, 270° = South)
+- `_alpha`: Angle of attack for the sail in degrees
+
+### Kinematics
+- `_speed`: 2D velocity vector [vx, vy] in m/s
+- `_angular_speed`: Rotational velocity in degrees/second
+- `_currentTime`: Current simulation time in seconds
+
+### Control Surfaces
+- `_rudder_angle`: Rudder deflection angle in degrees
+
+## Aerodynamic Model
+
+The boat uses lookup tables (CSV files) for foil coefficients:
+- **Sail Foil**: Contains lift (cl), drag (cd) coefficients vs. angle of attack
+- **Rudder Foil**: Separate coefficients for rudder control surfaces
+
+The model calculates:
+- `cr`: Radial force coefficient (forward/backward force)
+- `clat`: Lateral force coefficient (side force)
+
+## Physics Integration
+
+The class implements:
+- Force application via `apply_force()` (translational dynamics)
+- Angular acceleration via `apply_angular_acceleration()` (rotational dynamics)
+- State integration via `execute()` (position and heading updates)
+
+## Configuration
+
+Boat properties are loaded from JSON configuration files containing:
+- Physical parameters (mass, dimensions)
+- Foil specifications (sail_foil, rudder_foil filenames)
+- Performance characteristics
+
+## Coordinate System
+
+Uses standard trigonometric circle convention:
+- X-axis: East (0°)
+- Y-axis: North (90°)
+- Positive rotation: Counter-clockwise
+- All angles in degrees, positions in meters
+
+## Angle Normalization (2π Cut Problem)
+
+The boat handles the 2π cut problem (angle wrapping) through several mechanisms:
+
+### Heading Normalization
+- **Problem**: Heading angles can exceed 360° or go negative during simulation
+- **Solution**: The `execute()` method normalizes heading to [0°, 360°) range using while loops:
+  ```python
+  while self._heading >= 360: self._heading -= 360
+  while self._heading < 0: self._heading += 360
+  ```
+- **Purpose**: Ensures heading always represents a valid compass bearing
+
+### Angular Speed Limits
+- **Problem**: Uncontrolled angular acceleration could cause unrealistic spinning
+- **Solution**: `apply_angular_acceleration()` clamps angular speed to ±360°/time_delta
+- **Purpose**: Prevents the boat from spinning faster than one full rotation per timestep
+
+### Angle Range Consistency
+- All angle inputs (sail angle, rudder angle) are expected to be in degrees
+- The simulation maintains angle consistency by normalizing only the heading
+- Other angles (alpha, rudder_angle) are typically controlled within reasonable ranges by the sailing algorithms
+"""
+
 __all__ = ["Boat"]
 
 import json
 import numpy as np
 from os import path
 import pandas as pd
-from sailboat_playground.constants import constants
+from sailboat_playground.constants import constants, get_time_delta
 
 
 class Boat:
@@ -16,21 +102,31 @@ class Boat:
         except Exception as e:
             raise Exception(f"Failed to load configuration file: {e}")
         self._sail_foil_df = pd.read_csv(
-            path.join(foils_dir, f"{self._config['sail_foil']}.csv"))
+            path.join(foils_dir, f"{self._config['sail_foil']}.csv")
+        )
         self._rudder_foil_df = pd.read_csv(
-            path.join(foils_dir, f"{self._config['rudder_foil']}.csv"))
+            path.join(foils_dir, f"{self._config['rudder_foil']}.csv")
+        )
 
         self._sail_foil_df["alpha_rad"] = self._sail_foil_df["alpha"] * np.pi / 180
-        self._sail_foil_df["cr"] = np.sin(self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cl"] - np.cos(
-            self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cd"]
-        self._sail_foil_df["clat"] = np.cos(self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cl"] + np.cos(
-            self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cd"]
+        self._sail_foil_df["cr"] = (
+            np.sin(self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cl"]
+            - np.cos(self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cd"]
+        )
+        self._sail_foil_df["clat"] = (
+            np.cos(self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cl"]
+            + np.cos(self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cd"]
+        )
 
         self._rudder_foil_df["alpha_rad"] = self._rudder_foil_df["alpha"] * np.pi / 180
-        self._rudder_foil_df["cr"] = np.sin(self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cl"] - np.cos(
-            self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cd"]
-        self._rudder_foil_df["clat"] = np.cos(self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cl"] + np.cos(
-            self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cd"]
+        self._rudder_foil_df["cr"] = (
+            np.sin(self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cl"]
+            - np.cos(self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cd"]
+        )
+        self._rudder_foil_df["clat"] = (
+            np.cos(self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cl"]
+            + np.cos(self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cd"]
+        )
 
         self._speed = np.array([0, 0])
         self._angular_speed = 0
@@ -81,21 +177,24 @@ class Boat:
         return self._position
 
     def apply_force(self, force: np.ndarray):
-        self._speed = self._speed + (force / self.mass * constants.time_delta)
+        self._speed = self._speed + (force / self.mass * get_time_delta())
 
     def apply_angular_acceleration(self, accel: float):
-        self._angular_speed += accel * constants.time_delta
-        if self._angular_speed > 360 / constants.time_delta:
-            self._angular_speed = 360 / constants.time_delta
-        if self._angular_speed < -360 / constants.time_delta:
-            self._angular_speed = -360 / constants.time_delta
+        self._angular_speed += accel * get_time_delta()
+        if self._angular_speed > 360 / get_time_delta():
+            self._angular_speed = 360 / get_time_delta()
+        if self._angular_speed < -360 / get_time_delta():
+            self._angular_speed = -360 / get_time_delta()
 
     def execute(self):
-        self._currentTime += constants.time_delta
-        self._position = self._position + (self._speed * constants.time_delta)
-        self._heading += self._angular_speed * constants.time_delta
+        self._currentTime += get_time_delta()
+        self._position = self._position + (self._speed * get_time_delta())
+        self._heading += self._angular_speed * get_time_delta()
+        # Normalize heading to 0-360 range
         while self._heading >= 360:
             self._heading -= 360
+        while self._heading < 0:
+            self._heading += 360
 
     def set_alpha(self, alpha):
         self._alpha = alpha

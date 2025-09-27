@@ -2,3 +2,4 @@ numpy
 pyglet==1.5.17
 pandas
 cython
+tqdm    
