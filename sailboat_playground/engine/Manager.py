@@ -98,6 +98,12 @@ class Manager:
         self._apparent_wind_speed = 0
         self._apparent_wind_direction = 0
         self._debug = debug
+        self._last_force_components = {
+            "sail": np.array([0.0, 0.0]),
+            "hull": np.array([0.0, 0.0]),
+            "total": np.array([0.0, 0.0]),
+        }
+        self._last_angular_acceleration = 0.0
 
     def log(self, *args, **kwargs):
         if self._debug:
@@ -233,7 +239,8 @@ class Manager:
         F_R = np.dot(F_T, unit_vector) * unit_vector
         self.log(f"F_R={F_R}")
         self.log(f"* Adding {F_R}")
-        total_force += F_R
+        sail_force = F_R
+        total_force += sail_force
 
         # # 2 - Water forces on hull
         # # 2.1 - Compute apparent water current
@@ -261,8 +268,9 @@ class Manager:
         F_WR = norm_to_vector(F_WR_norm, Wa_angle * np.pi / 180)
         self.log(f"F_WR={F_WR}")
         self.log(f"* Adding {F_WR}")
+        hull_force = F_WR
         # 2.3 - Apply forces
-        total_force += F_WR
+        total_force += hull_force
 
         # 3 - Water forces on rudder
         # 3.1 - Compute water force on rudder
@@ -343,10 +351,16 @@ class Manager:
         self.log(f"angular_acceleration={angular_acceleration}")
         # 3.4 - Apply angular acceleration
         self._boat.apply_angular_acceleration(angular_acceleration)
+        self._last_angular_acceleration = angular_acceleration
 
         # 4 - Apply all forces
         self.log(f"--> Applying total_force={total_force}")
         self._boat.apply_force(total_force)
+        self._last_force_components = {
+            "sail": sail_force,
+            "hull": hull_force,
+            "total": total_force,
+        }
 
         # 4 - Execute boat and environment
         self._boat.execute()

@@ -7,6 +7,7 @@ from sailboat_playground.visualization.resources.resources import (
     speed_image,
     buoy_image,
 )
+import math
 
 
 class Viewer:
@@ -35,6 +36,51 @@ class Viewer:
         self._wind_origin = (WIND_X, WIND_Y)
         self._wind_vector_vertices = None
         self._wind_vector_batch = pyglet.graphics.Batch()
+        self._force_vector_batch = pyglet.graphics.Batch()
+        self._force_vectors = {}
+        self._torque_vertices = None
+        self._max_force_magnitude = 1.0
+
+        self._legend_total = pyglet.text.Label(
+            text="Total Force",
+            x=400,
+            y=40,
+            anchor_x="center",
+            anchor_y="center",
+            color=(255, 0, 0, 255),
+            font_size=14,
+            batch=self._main_batch,
+        )
+        self._legend_sail = pyglet.text.Label(
+            text="Sail Force",
+            x=400,
+            y=20,
+            anchor_x="center",
+            anchor_y="center",
+            color=(0, 255, 0, 255),
+            font_size=12,
+            batch=self._main_batch,
+        )
+        self._legend_hull = pyglet.text.Label(
+            text="Hull Drag",
+            x=400,
+            y=0,
+            anchor_x="center",
+            anchor_y="center",
+            color=(0, 128, 255, 255),
+            font_size=12,
+            batch=self._main_batch,
+        )
+        self._legend_torque = pyglet.text.Label(
+            text="Torque (CW+/CCW-)",
+            x=400,
+            y=-20,
+            anchor_x="center",
+            anchor_y="center",
+            color=(255, 165, 0, 255),
+            font_size=12,
+            batch=self._main_batch,
+        )
         self._wind_text = pyglet.text.Label(
             text="N/A m/s",
             x=WIND_X,
@@ -168,8 +214,17 @@ class Viewer:
             head_x2 = end_x + head_size * np.cos(head_angle2)
             head_y2 = end_y + head_size * np.sin(head_angle2)
 
-            head_vertices = [end_x, end_y, head_x1, head_y1, head_x2, head_y2]
-            head_colors = [255, 255, 0, 255] * 3  # Yellow head
+            head_vertices = [
+                end_x,
+                end_y,
+                head_x1,
+                head_y1,
+                end_x,
+                end_y,
+                head_x2,
+                head_y2,
+            ]
+            head_colors = [255, 255, 0, 255] * 4  # Yellow head
 
             # Create vertices for both shaft and head
             all_vertices = shaft_vertices + head_vertices
@@ -214,6 +269,7 @@ class Viewer:
         self._window.clear()
         self._main_batch.draw()
         self._wind_vector_batch.draw()
+        self._force_vector_batch.draw()
 
     def update(self, dt, state_list=None, step_size=1):
         if self._step >= len(state_list):
@@ -271,3 +327,126 @@ class Viewer:
 
         # Run
         pyglet.app.run()
+
+    def draw_force_vectors(self, boat_position, forces):
+        if forces is None:
+            return
+
+        origin = map_position(np.array(boat_position), self._map_size)
+        colors = {
+            "total": (255, 0, 0, 255),
+            "sail": (0, 255, 0, 255),
+            "hull": (0, 128, 255, 255),
+        }
+        scale = 20.0
+
+        for key, vec in forces.items():
+            vec_key = f"force_{key}"
+            if self._force_vectors.get(vec_key) is not None:
+                self._force_vectors[vec_key].delete()
+                self._force_vectors[vec_key] = None
+
+            if vec is None:
+                continue
+
+            magnitude = np.linalg.norm(vec)
+            if magnitude < 1e-6:
+                continue
+
+            self._max_force_magnitude = max(
+                self._max_force_magnitude * 0.98, magnitude, 1.0
+            )
+            scale = 120.0 / self._max_force_magnitude
+            vector_length = magnitude * scale
+            if vector_length < 18.0:
+                scale = max(scale, 18.0 / max(magnitude, 1e-6))
+
+            end_x = origin[0] + vec[0] * scale
+            end_y = origin[1] + vec[1] * scale
+
+            shaft_vertices = [origin[0], origin[1], end_x, end_y]
+            shaft_colors = list(colors.get(key, (255, 255, 255, 255))) * 2
+
+            head_size = max(10.0, magnitude * scale * 0.3)
+            angle = math.atan2(vec[1], vec[0])
+            left_angle = angle + math.pi - math.pi / 6
+            right_angle = angle + math.pi + math.pi / 6
+            head_vertices = [
+                end_x,
+                end_y,
+                end_x + head_size * math.cos(left_angle),
+                end_y + head_size * math.sin(left_angle),
+                end_x,
+                end_y,
+                end_x + head_size * math.cos(right_angle),
+                end_y + head_size * math.sin(right_angle),
+            ]
+            head_colors = list(colors.get(key, (255, 255, 255, 255))) * 4
+
+            vertices = shaft_vertices + head_vertices
+            color_data = shaft_colors + head_colors
+
+            self._force_vectors[vec_key] = self._force_vector_batch.add(
+                len(vertices) // 2,
+                pyglet.gl.GL_LINES,
+                None,
+                ("v2f", vertices),
+                ("c4B", color_data),
+            )
+
+    def draw_torque_arc(self, boat_position, angular_accel):
+        if self._torque_vertices is not None:
+            self._torque_vertices.delete()
+            self._torque_vertices = None
+
+        if angular_accel is None or abs(angular_accel) < 1e-4:
+            return
+
+        origin = map_position(np.array(boat_position), self._map_size)
+        radius = 45.0
+        segments = 16
+        direction = -1 if angular_accel > 0 else 1  # positive accel => clockwise torque
+        sweep_angle = max(0.3, min(abs(angular_accel) * 2.0, math.pi * 1.5))
+
+        start_angle = math.pi / 2  # start in front of boat (pointing upward on screen)
+        angles = [
+            start_angle + direction * sweep_angle * (i / segments)
+            for i in range(segments + 1)
+        ]
+
+        vertices = []
+        colors = []
+        color = (255, 165, 0, 255)
+        for i in range(segments):
+            a0 = angles[i]
+            a1 = angles[i + 1]
+            x0 = origin[0] + radius * math.cos(a0)
+            y0 = origin[1] + radius * math.sin(a0)
+            x1 = origin[0] + radius * math.cos(a1)
+            y1 = origin[1] + radius * math.sin(a1)
+            vertices.extend([x0, y0, x1, y1])
+            colors.extend(list(color) * 2)
+
+        arrow_base_angle = angles[-1]
+        arrow_length = 12.0
+        arrow_width = 6.0
+        tip_x = origin[0] + radius * math.cos(arrow_base_angle)
+        tip_y = origin[1] + radius * math.sin(arrow_base_angle)
+        normal_angle = arrow_base_angle + direction * math.pi / 2
+        base_x = tip_x + arrow_length * math.cos(arrow_base_angle)
+        base_y = tip_y + arrow_length * math.sin(arrow_base_angle)
+        left_x = base_x + arrow_width * math.cos(normal_angle)
+        left_y = base_y + arrow_width * math.sin(normal_angle)
+        right_x = base_x - arrow_width * math.cos(normal_angle)
+        right_y = base_y - arrow_width * math.sin(normal_angle)
+
+        vertices.extend([tip_x, tip_y, left_x, left_y, tip_x, tip_y, right_x, right_y])
+        colors.extend(list(color) * 4)
+
+        self._torque_vertices = self._force_vector_batch.add(
+            len(vertices) // 2,
+            pyglet.gl.GL_LINES,
+            None,
+            ("v2f", vertices),
+            ("c4B", colors),
+        )
