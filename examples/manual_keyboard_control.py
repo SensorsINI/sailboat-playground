@@ -22,8 +22,21 @@ Notes
 """
 
 import math
+import os
+from pathlib import Path
+import sys
+
 import numpy as np
 import pyglet
+
+EXAMPLES_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = EXAMPLES_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+BOAT_CONFIG = PROJECT_ROOT / "boats" / "sample_boat.json"
+ENVIRONMENT_CONFIG = PROJECT_ROOT / "environments" / "playground.json"
+FOILS_DIR = PROJECT_ROOT / "foils"
 
 from sailboat_playground.engine import Manager
 from sailboat_playground.visualization import Viewer
@@ -79,10 +92,11 @@ class ManualKeyboardSimulation:
     def _create_simulator(self):
         self.simulation_steps = 0
         self.manager = Manager(
-            "boats/sample_boat.json",
-            "environments/playground.json",
+            str(BOAT_CONFIG),
+            str(ENVIRONMENT_CONFIG),
             boat_heading=INITIAL_HEADING_DEG,
             boat_position=INITIAL_POSITION,
+            foils_dir=str(FOILS_DIR),
         )
         self._state_history.clear()
         self._previous_state = None
