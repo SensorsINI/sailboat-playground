@@ -21,6 +21,7 @@ Notes
 - Requires pyglet 1.5.x (1.5.17 recommended).
 """
 
+import json
 import math
 import os
 from pathlib import Path
@@ -34,18 +35,27 @@ PROJECT_ROOT = EXAMPLES_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-BOAT_CONFIG = PROJECT_ROOT / "boats" / "sample_boat.json"
+BOAT_CONFIG = PROJECT_ROOT / "boats" / "argo_boat.json"
 ENVIRONMENT_CONFIG = PROJECT_ROOT / "environments" / "playground.json"
 FOILS_DIR = PROJECT_ROOT / "foils"
+
+try:
+    with open(BOAT_CONFIG, "r") as boat_file:
+        _boat_cfg = json.load(boat_file)
+        _boat_length_m = float(_boat_cfg.get("length", 1.0))
+except Exception as exc:
+    print(f"Warning: failed to load boat config '{BOAT_CONFIG}': {exc}")
+    _boat_length_m = 1.0
 
 from sailboat_playground.engine import Manager
 from sailboat_playground.visualization import Viewer
 from sailboat_playground.visualization.utils import map_position
 
 
-ARENA_SIZE_METERS = 200
+ARENA_SIZE_METERS = max(1.0, _boat_length_m * 60.0)
 INITIAL_POSITION = np.array([0.0, 0.0])
-INITIAL_HEADING_DEG = 90.0  # 0° = East, 90° = North
+INITIAL_HEADING_DEG = 220.0  # 0 = East, 90 = North, 180 = West, 270 = South
+INITIAL_SPEED = 1.0  # meters per second of headway at start-up
 
 RUDDER_STEP = 0.125  # matches Argo keyboard control granularity
 SAIL_STEP = 0.125
@@ -66,6 +76,9 @@ class ManualKeyboardSimulation:
         print("- Space toggles pause, R resets, C centers controls")
         print("- W rotates wind CCW, E rotates wind CW (10° steps)")
         print("- Q / ESC quits\n")
+        print(f"Boat config: {BOAT_CONFIG}")
+        print(f"Environment config: {ENVIRONMENT_CONFIG}")
+        print(f"Foils directory: {FOILS_DIR}\n")
 
         self.viewer = Viewer(map_size=ARENA_SIZE_METERS)
         self.viewer.init()
@@ -73,16 +86,17 @@ class ManualKeyboardSimulation:
         self.window.push_handlers(self.on_key_press)
         self.window.push_handlers(self.on_key_release)
 
-        self.manual_rudder = 0.0  # -1 (left) .. +1 (right)
-        self.manual_sail = -1.0    # -1 (sheeted in) .. +1 (fully eased)
+        self.manual_rudder = 0.0  # neutral rudder, relies on initial heading
+        self.manual_sail = -0.35  # powered-up trim with forward bias
         self.paused = False
+        self.single_step_mode = False
 
         self._last_sail_side = 1.0
         self._last_relative_wind = 0.0
 
         self._state_history = []
 
-        self.wind_direction_deg = 35.0
+        self.wind_direction_deg = 220.0 # overwritten by _apply_wind_direction()
 
         self._create_simulator()
 
@@ -98,9 +112,37 @@ class ManualKeyboardSimulation:
             boat_position=INITIAL_POSITION,
             foils_dir=str(FOILS_DIR),
         )
+        if INITIAL_SPEED > 0.0:
+            heading_rad = math.radians(INITIAL_HEADING_DEG)
+            initial_velocity = np.array(
+                [
+                    INITIAL_SPEED * math.cos(heading_rad),
+                    INITIAL_SPEED * math.sin(heading_rad),
+                ]
+            )
+            self.manager._boat._speed = initial_velocity
         self._state_history.clear()
         self._previous_state = None
         self._apply_wind_direction()
+        self._print_initial_state()
+
+    def _print_initial_state(self):
+        state = self.manager.state
+        boat_position = state["boat_position"]
+        boat_speed = np.linalg.norm(state["boat_speed"])
+        wind_speed = np.linalg.norm(state["wind_speed"])
+        print(
+            (
+                "Initial state | Heading: {heading:.1f}° | Speed: {speed:.2f} m/s | "
+                "Position: ({x:.1f}, {y:.1f}) | Wind: {wind:.1f} m/s"
+            ).format(
+                heading=state["boat_heading"],
+                speed=boat_speed,
+                x=boat_position[0],
+                y=boat_position[1],
+                wind=wind_speed,
+            )
+        )
 
     # ------------------------------------------------------------------
     # Keyboard handling
@@ -118,13 +160,22 @@ class ManualKeyboardSimulation:
             self.manual_rudder = 0.0
             self.manual_sail = -1.0
         elif symbol == pyglet.window.key.SPACE:
-            self.paused = not self.paused
+            if self.single_step_mode:
+                self.single_step_mode = False
+                self.paused = False
+            else:
+                self.paused = not self.paused
         elif symbol == pyglet.window.key.R:
             self._create_simulator()
         elif symbol == pyglet.window.key.W:
             self._rotate_wind(-10.0)
         elif symbol == pyglet.window.key.E:
             self._rotate_wind(10.0)
+        elif symbol == pyglet.window.key.PERIOD:
+            if not self.single_step_mode:
+                self.single_step_mode = True
+                self.paused = True
+            self.update_simulation(0.0)
         elif symbol in (pyglet.window.key.Q, pyglet.window.key.ESCAPE):
             pyglet.app.exit()
 
@@ -144,6 +195,15 @@ class ManualKeyboardSimulation:
     # ------------------------------------------------------------------
     # Simulation loop
     # ------------------------------------------------------------------
+    @staticmethod
+    def _velocity_components(velocity: np.ndarray, heading_deg: float) -> tuple[float, float]:
+        heading_rad = math.radians(heading_deg)
+        forward_axis = np.array([math.cos(heading_rad), math.sin(heading_rad)])
+        lateral_axis = np.array([-math.sin(heading_rad), math.cos(heading_rad)])
+        forward_component = float(np.dot(velocity, forward_axis))
+        lateral_component = float(np.dot(velocity, lateral_axis))
+        return forward_component, lateral_component
+
     def update_simulation(self, dt):
         if self.paused:
             return
@@ -189,12 +249,21 @@ class ManualKeyboardSimulation:
         self.viewer.draw_force_vectors(boat_position, forces)
         angular_accel = getattr(self.manager, "_last_angular_acceleration", 0.0)
         self.viewer.draw_torque_arc(boat_position, angular_accel)
+        self.viewer._draw_scale_bar()
 
         wind_speed = state["wind_speed"]
         self.viewer._draw_wind_vector(wind_speed)
         self.viewer._wind_text.text = f"Wind: {np.linalg.norm(wind_speed):.1f} m/s"
-        speed = np.linalg.norm(state["boat_speed"])
-        self.viewer._speed_text.text = f"Speed: {speed:.2f} m/s"
+        boat_velocity = state["boat_speed"]
+        speed = np.linalg.norm(boat_velocity)
+        forward_speed, lateral_speed = self._velocity_components(
+            boat_velocity, state["boat_heading"]
+        )
+        self.viewer._speed_text.text = (
+            f"Speed: {speed:.2f} m/s\n"
+            f"Fwd:  {forward_speed:+.2f} m/s\n"
+            f"Slip: {lateral_speed:+.2f} m/s"
+        )
         self.viewer._position_text.text = (
             f"Pos: ({boat_position[0]:.1f}, {boat_position[1]:.1f})"
         )
@@ -207,7 +276,11 @@ class ManualKeyboardSimulation:
             return
 
         latest = self._state_history[-1]
-        speed = np.linalg.norm(latest["boat_speed"])
+        boat_velocity = latest["boat_speed"]
+        speed = np.linalg.norm(boat_velocity)
+        forward_speed, lateral_speed = self._velocity_components(
+            boat_velocity, latest["boat_heading"]
+        )
         forces = getattr(self.manager, "_last_force_components", None)
         total_force = np.linalg.norm(forces["total"]) if forces else 0.0
         angular_accel = getattr(self.manager, "_last_angular_acceleration", 0.0)
@@ -215,6 +288,7 @@ class ManualKeyboardSimulation:
             f"Step {self.simulation_steps:4d} | "
             f"Heading {latest['boat_heading']:.1f}° | "
             f"Speed {speed:.2f} m/s | "
+            f"Fwd {forward_speed:+.2f} m/s | Slip {lateral_speed:+.2f} m/s | "
             f"Wind rel {self._last_relative_wind:.1f}° | "
             f"Sail cmd {self.manual_sail:+.2f} | Rudder cmd {self.manual_rudder:+.2f} | "
             f"|F| {total_force:.2f} N | α_ddot {angular_accel:.3f}"

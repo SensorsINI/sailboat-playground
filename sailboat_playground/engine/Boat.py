@@ -108,21 +108,39 @@ class Boat:
             path.join(foils_dir, f"{self._config['rudder_foil']}.csv")
         )
 
+        # Compute the sail foil angle in radians for trigonometric computations
         self._sail_foil_df["alpha_rad"] = self._sail_foil_df["alpha"] * np.pi / 180
+
+        # Calculate the crosswise force coefficient (cr) for the sail.
+        # This combines the lift (cl) and drag (cd) resolved into the crosswise direction
+        # relative to the apparent flow, using the angle of attack (alpha_rad).
+        # cr = sin(alpha)*cl - cos(alpha)*cd
         self._sail_foil_df["cr"] = (
             np.sin(self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cl"]
             - np.cos(self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cd"]
         )
+
+        # Calculate the alongwise force coefficient (clat) for the sail.
+        # This is the total force component aligned with the foil chord,
+        # essentially the forward or "longitudinal" component in foil coordinates.
+        # clat = cos(alpha)*cl + cos(alpha)*cd
         self._sail_foil_df["clat"] = (
             np.cos(self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cl"]
             + np.cos(self._sail_foil_df["alpha_rad"]) * self._sail_foil_df["cd"]
         )
 
+        # Repeat the same process for the rudder foil: calculate the angle in radians
         self._rudder_foil_df["alpha_rad"] = self._rudder_foil_df["alpha"] * np.pi / 180
+
+        # Calculate the crosswise force coefficient (cr) for the rudder,
+        # using lift and drag coefficients and the current angle of attack.
         self._rudder_foil_df["cr"] = (
             np.sin(self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cl"]
             - np.cos(self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cd"]
         )
+
+        # Calculate the alongwise force coefficient (clat) for the rudder,
+        # again combining lift and drag along the rudder chord line.
         self._rudder_foil_df["clat"] = (
             np.cos(self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cl"]
             + np.cos(self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cd"]
@@ -177,6 +195,25 @@ class Boat:
         return self._position
 
     def apply_force(self, force: np.ndarray):
+        """
+        Apply a force vector to the boat, updating its velocity.
+
+        Args:
+            force (np.ndarray): The force vector [Fx, Fy] applied in the world frame (units: N).
+
+        Explanation:
+            This method directly updates the boat's velocity vector (_speed) based on the applied force.
+            The input 'force' can have components in any direction in the world (map) coordinate system:
+            - If 'force' points exactly along the hull's longitudinal axis (aft to fore), it will accelerate the boat forward or backward.
+            - If 'force' has a lateral (sideways) component—across the hull—it can give the boat sideways velocity ("slip" or leeway).
+            - There is no restriction to only apply forces along the hull axis: any arbitrary 2D force may be supplied and will be reflected in the resulting velocity vector.
+
+            In typical sailboat simulation, most propulsion is applied along the hull axis (from sail force projected via heading/angle of attack),
+            but hydrodynamic modeling—such as leeway, current, and wind forces—can and do result in lateral or oblique force vectors.
+
+            The time integration here is simple explicit Euler:
+                v_new = v_old + (F / m) * dt
+        """
         self._speed = self._speed + (force / self.mass * get_time_delta())
 
     def apply_angular_acceleration(self, accel: float):

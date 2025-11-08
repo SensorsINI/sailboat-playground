@@ -234,12 +234,25 @@ class Manager:
         self.log(f"L={L}")
         F_T = L + D
         self.log(f"F_T={F_T}")
-        # 1.3 - Compute driving force (project total force into unit vector on boat heading)
-        unit_vector = norm_to_vector(1, self._boat.heading * np.pi / 180)
-        F_R = np.dot(F_T, unit_vector) * unit_vector
-        self.log(f"F_R={F_R}")
-        self.log(f"* Adding {F_R}")
-        sail_force = F_R
+        # 1.3 - Split total force into along-hull drive + lateral slip component
+        heading_rad = self._boat.heading * np.pi / 180
+        forward_axis = norm_to_vector(1, heading_rad)
+
+        F_drive = np.dot(F_T, forward_axis) * forward_axis
+        self.log(f"F_drive={F_drive}")
+
+        # Any residual force represents side-force from the sail and generates leeway ("slip").
+        F_lateral_raw = F_T - F_drive
+
+        # Empirical slip coefficient: hull prevents most of the lateral impulse, but a portion
+        # still pushes the boat sideways. Tweakable constant chosen conservatively (< 1.0).
+        SLIP_FORCE_COEFF = 0.25
+        F_slip = SLIP_FORCE_COEFF * F_lateral_raw
+        self.log(f"F_slip_raw={F_lateral_raw}")
+        self.log(f"F_slip_applied={F_slip}")
+
+        sail_force = F_drive + F_slip
+        self.log(f"* Adding sail_force={sail_force}")
         total_force += sail_force
 
         # # 2 - Water forces on hull

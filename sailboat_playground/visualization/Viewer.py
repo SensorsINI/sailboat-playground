@@ -17,7 +17,7 @@ class Viewer:
         self._buoy_list = buoy_list if buoy_list is not None else []
         self._window = pyglet.window.Window(800, 800)
         self._window.event(self.on_draw)
-        pyglet.gl.glClearColor(0.1, 0.4, 0.8, 0.4)
+        pyglet.gl.glClearColor(0.05, 0.15, 0.3, 1.0)
         self._step = 0
         self._main_batch = pyglet.graphics.Batch()
 
@@ -34,47 +34,59 @@ class Viewer:
         WIND_X = 400  # Center horizontally
         WIND_Y = 400  # Center vertically
         self._wind_origin = (WIND_X, WIND_Y)
-        self._wind_vector_vertices = None
+        self._wind_vector_vertices = {}
         self._wind_vector_batch = pyglet.graphics.Batch()
         self._force_vector_batch = pyglet.graphics.Batch()
         self._force_vectors = {}
         self._torque_vertices = None
         self._max_force_magnitude = 1.0
+        self._scale_vertices = None
+        self._scale_batch = pyglet.graphics.Batch()
+        self._scale_label = pyglet.text.Label(
+            text="",
+            x=40,
+            y=120,
+            anchor_x="center",
+            anchor_y="center",
+            batch=self._scale_batch,
+            font_size=13,
+            color=(220, 230, 255, 255),
+        )
 
         self._legend_total = pyglet.text.Label(
             text="Total Force",
             x=400,
-            y=40,
+            y=760,
             anchor_x="center",
             anchor_y="center",
-            color=(255, 0, 0, 255),
+            color=(255, 120, 120, 255),
             font_size=14,
             batch=self._main_batch,
         )
         self._legend_sail = pyglet.text.Label(
             text="Sail Force",
             x=400,
-            y=20,
+            y=740,
             anchor_x="center",
             anchor_y="center",
-            color=(0, 255, 0, 255),
+            color=(110, 205, 110, 255),
             font_size=12,
             batch=self._main_batch,
         )
         self._legend_hull = pyglet.text.Label(
             text="Hull Drag",
             x=400,
-            y=0,
+            y=720,
             anchor_x="center",
             anchor_y="center",
-            color=(0, 128, 255, 255),
+            color=(120, 190, 255, 255),
             font_size=12,
             batch=self._main_batch,
         )
         self._legend_torque = pyglet.text.Label(
             text="Torque (CW+/CCW-)",
             x=400,
-            y=-20,
+            y=700,
             anchor_x="center",
             anchor_y="center",
             color=(255, 165, 0, 255),
@@ -84,25 +96,27 @@ class Viewer:
         self._wind_text = pyglet.text.Label(
             text="N/A m/s",
             x=WIND_X,
-            y=10,
+            y=1,
             anchor_x="center",
-            anchor_y="center",
+            anchor_y="bottom",
             batch=self._main_batch,
             font_size=15,
         )
 
-        SPEED_X = 140
+        SPEED_X = 120
         self._speed_icon = pyglet.sprite.Sprite(
             img=speed_image, x=SPEED_X, y=40, batch=self._main_batch
         )
         self._speed_text = pyglet.text.Label(
             text="N/A m/s",
-            x=SPEED_X,
-            y=10,
-            anchor_x="center",
-            anchor_y="center",
+            x=SPEED_X + 30,
+            y=50,
+            anchor_x="left",
+            anchor_y="baseline",
+            multiline=True,
+            width=200,
             batch=self._main_batch,
-            font_size=15,
+            font_size=14,
         )
 
         POSITION_X = 700
@@ -111,7 +125,7 @@ class Viewer:
             x=POSITION_X,
             y=10,
             anchor_x="center",
-            anchor_y="center",
+            anchor_y="baseline",
             batch=self._main_batch,
             font_size=15,
         )
@@ -139,6 +153,88 @@ class Viewer:
                 )
             )
 
+    def _add_wind_arrow(
+        self,
+        origin_x: float,
+        origin_y: float,
+        ux: float,
+        uy: float,
+        length: float,
+        head_size: float,
+        clip_positive: bool,
+        clip_negative: bool,
+        clip_indicator_size: float,
+    ):
+        arrow_color = (180, 210, 255, 255)
+        clip_color = (255, 120, 120, 255)
+
+        half_len = length * 0.5
+        start_x = origin_x - half_len * ux
+        start_y = origin_y - half_len * uy
+        end_x = origin_x + half_len * ux
+        end_y = origin_y + half_len * uy
+
+        shaft_vertices = [start_x, start_y, end_x, end_y]
+        shaft_colors = list(arrow_color) * 2
+
+        arrow_angle = math.atan2(uy, ux)
+        head_angle_offset = math.pi / 5
+        left_angle = arrow_angle + math.pi - head_angle_offset
+        right_angle = arrow_angle + math.pi + head_angle_offset
+
+        head_vertices = [
+            end_x,
+            end_y,
+            end_x + head_size * math.cos(left_angle),
+            end_y + head_size * math.sin(left_angle),
+            end_x,
+            end_y,
+            end_x + head_size * math.cos(right_angle),
+            end_y + head_size * math.sin(right_angle),
+        ]
+        head_colors = list(arrow_color) * 4
+
+        all_vertices = shaft_vertices + head_vertices
+        all_colors = shaft_colors + head_colors
+
+        clip_angle_offset = math.pi / 4
+
+        def extend_clip_indicator(point_x, point_y, direction_angle):
+            clip_vertices = [
+                point_x,
+                point_y,
+                point_x
+                + clip_indicator_size
+                * math.cos(direction_angle + math.pi - clip_angle_offset),
+                point_y
+                + clip_indicator_size
+                * math.sin(direction_angle + math.pi - clip_angle_offset),
+                point_x,
+                point_y,
+                point_x
+                + clip_indicator_size
+                * math.cos(direction_angle + math.pi + clip_angle_offset),
+                point_y
+                + clip_indicator_size
+                * math.sin(direction_angle + math.pi + clip_angle_offset),
+            ]
+            clip_colors = list(clip_color) * 4
+            all_vertices.extend(clip_vertices)
+            all_colors.extend(clip_colors)
+
+        if clip_positive:
+            extend_clip_indicator(end_x, end_y, arrow_angle)
+        if clip_negative:
+            extend_clip_indicator(start_x, start_y, arrow_angle + math.pi)
+
+        return self._wind_vector_batch.add(
+            len(all_vertices) // 2,
+            pyglet.gl.GL_LINES,
+            None,
+            ("v2f", all_vertices),
+            ("c4B", all_colors),
+        )
+
     def _draw_wind_vector(self, wind_speed):
         """
         Draw wind vector showing direction and speed.
@@ -146,132 +242,182 @@ class Viewer:
         Args:
             wind_speed (np.ndarray): Wind velocity vector [x, y] in m/s
         """
-        # Clear previous wind vector
-        if self._wind_vector_vertices is not None:
-            self._wind_vector_vertices.delete()
+        # Clear previous wind vectors
+        for handle in self._wind_vector_vertices.values():
+            if handle is not None:
+                handle.delete()
+        self._wind_vector_vertices.clear()
+
+        # Visualize the true wind flow direction (arrow points toward where the wind travels)
+        wind_vector = np.array(wind_speed, dtype=float)
 
         # Calculate wind speed magnitude and direction
-        wind_magnitude = np.linalg.norm(wind_speed)
-        if wind_magnitude < 0.01:  # Very light wind, draw a small circle
-            # Draw a small circle for very light wind
-            circle_radius = 2
-            vertices = []
-            colors = []
-            for i in range(8):  # 8-sided circle
-                angle = i * 2 * np.pi / 8
-                x = self._wind_origin[0] + circle_radius * np.cos(angle)
-                y = self._wind_origin[1] + circle_radius * np.sin(angle)
-                vertices.extend([x, y])
-                colors.extend([255, 255, 0, 255])  # Yellow for light wind
-            self._wind_vector_vertices = self._wind_vector_batch.add(
-                len(vertices) // 2,
-                pyglet.gl.GL_POLYGON,
-                None,
-                ("v2f", vertices),
-                ("c4B", colors),
+        wind_magnitude = np.linalg.norm(wind_vector)
+        # Pre-compute grid of origins (4x4 across window, centered in sailing area)
+        grid_cols = grid_rows = 4
+        width = self._window.width
+        height = self._window.height
+        x_positions = [
+            width * (i + 1) / (grid_cols + 1) for i in range(grid_cols)
+        ]
+        y_positions = [
+            height * (j + 1) / (grid_rows + 1) for j in range(grid_rows)
+        ]
+        origins = [(x, y) for x in x_positions for y in y_positions]
+
+        if wind_magnitude < 0.01:
+            # Represent calm conditions with small dots at each grid point
+            circle_radius = 3
+            for origin_x, origin_y in origins:
+                vertices = []
+                colors = []
+                for i in range(8):
+                    angle = i * 2 * np.pi / 8
+                    x = origin_x + circle_radius * np.cos(angle)
+                    y = origin_y + circle_radius * np.sin(angle)
+                    vertices.extend([x, y])
+                    colors.extend([180, 210, 255, 255])
+                handle = self._wind_vector_batch.add(
+                    len(vertices) // 2,
+                    pyglet.gl.GL_POLYGON,
+                    None,
+                    ("v2f", vertices),
+                    ("c4B", colors),
+                )
+                self._wind_vector_vertices[(origin_x, origin_y)] = handle
+            return
+
+        # Scale arrows based on magnitude (normalized across grid)
+        scale_factor = 40.0
+        desired_length = wind_magnitude * scale_factor
+
+        wind_angle = compute_angle(wind_vector)
+        ux = np.cos(wind_angle)
+        uy = np.sin(wind_angle)
+
+        margin = 40.0
+        desired_half = desired_length * 0.5
+        arrow_limits = []
+        min_half_limit = desired_half
+
+        for origin_x, origin_y in origins:
+            pos_limit = float("inf")
+            neg_limit = float("inf")
+
+            if abs(ux) > 1e-6:
+                if ux > 0:
+                    pos_limit = min(pos_limit, (width - margin - origin_x) / ux)
+                    neg_limit = min(neg_limit, (origin_x - margin) / ux)
+                else:
+                    pos_limit = min(pos_limit, (origin_x - margin) / (-ux))
+                    neg_limit = min(neg_limit, (width - margin - origin_x) / (-ux))
+
+            if abs(uy) > 1e-6:
+                if uy > 0:
+                    pos_limit = min(pos_limit, (height - margin - origin_y) / uy)
+                    neg_limit = min(neg_limit, (origin_y - margin) / uy)
+                else:
+                    pos_limit = min(pos_limit, (origin_y - margin) / (-uy))
+                    neg_limit = min(
+                        neg_limit, (height - margin - origin_y) / (-uy)
+                    )
+
+            pos_limit = max(pos_limit, 0.0)
+            neg_limit = max(neg_limit, 0.0)
+
+            arrow_limits.append((origin_x, origin_y, pos_limit, neg_limit))
+            min_half_limit = min(min_half_limit, pos_limit, neg_limit)
+
+        half_length = min(desired_half, min_half_limit)
+        vector_length = half_length * 2.0
+        head_size = max(8, vector_length * 0.15)
+        clip_indicator_size = 6
+
+        for origin_x, origin_y, pos_limit, neg_limit in arrow_limits:
+            clip_positive = (
+                pos_limit < float("inf") and half_length >= pos_limit - 1e-6
             )
-        else:
-            # Scale: 1 m/s = 5% of screen height (40 pixels for 800px screen)
-            scale_factor = 40.0  # pixels per m/s
-            vector_length = wind_magnitude * scale_factor
-
-            # Limit vector length to prevent it from extending beyond screen bounds
-            # Leave some margin from screen edges (100px from all edges)
-            max_length_x = min(
-                self._wind_origin[0] - 100, 800 - self._wind_origin[0] - 100
-            )
-            max_length_y = min(
-                self._wind_origin[1] - 100, 800 - self._wind_origin[1] - 100
-            )
-            max_length = min(max_length_x, max_length_y)
-
-            # With centered origin, we have plenty of room (300px radius)
-            max_length = max(max_length, 300)  # At least 300 pixels from center
-
-            # Check if vector needs to be clipped
-            is_clipped = vector_length > max_length
-            if is_clipped:
-                vector_length = max_length
-
-            # Calculate wind direction (angle from wind velocity vector)
-            wind_angle = compute_angle(wind_speed)
-
-            # Calculate vector endpoint
-            end_x = self._wind_origin[0] + vector_length * np.cos(wind_angle)
-            end_y = self._wind_origin[1] + vector_length * np.sin(wind_angle)
-
-            # Draw arrow shaft
-            shaft_vertices = [self._wind_origin[0], self._wind_origin[1], end_x, end_y]
-            shaft_colors = [255, 255, 0, 255] * 2  # Yellow shaft
-
-            # Draw arrow head
-            head_size = max(12, vector_length * 0.3)  # Larger arrow head size
-            head_angle1 = wind_angle + np.pi - np.pi / 3  # 45 degrees to the left, pointing toward origin
-            head_angle2 = wind_angle + np.pi + np.pi / 4  # 45 degrees to the right, pointing toward origin
-
-            head_x1 = end_x + head_size * np.cos(head_angle1)
-            head_y1 = end_y + head_size * np.sin(head_angle1)
-            head_x2 = end_x + head_size * np.cos(head_angle2)
-            head_y2 = end_y + head_size * np.sin(head_angle2)
-
-            head_vertices = [
-                end_x,
-                end_y,
-                head_x1,
-                head_y1,
-                end_x,
-                end_y,
-                head_x2,
-                head_y2,
-            ]
-            head_colors = [255, 255, 0, 255] * 4  # Yellow head
-
-            # Create vertices for both shaft and head
-            all_vertices = shaft_vertices + head_vertices
-            all_colors = shaft_colors + head_colors
-
-            # Add clipping indicator if vector was clipped
-            if is_clipped:
-                # Add a ">" symbol at the end to indicate clipping
-                clip_indicator_size = 6
-                clip_angle1 = wind_angle + np.pi - np.pi / 4  # 45 degrees
-                clip_angle2 = wind_angle + np.pi + np.pi / 4  # 45 degrees
-
-                clip_x1 = end_x + clip_indicator_size * np.cos(clip_angle1)
-                clip_y1 = end_y + clip_indicator_size * np.sin(clip_angle1)
-                clip_x2 = end_x + clip_indicator_size * np.cos(clip_angle2)
-                clip_y2 = end_y + clip_indicator_size * np.sin(clip_angle2)
-
-                clip_vertices = [
-                    end_x,
-                    end_y,
-                    clip_x1,
-                    clip_y1,
-                    end_x,
-                    end_y,
-                    clip_x2,
-                    clip_y2,
-                ]
-                clip_colors = [255, 0, 0, 255] * 4  # Red for clipping indicator
-
-                all_vertices.extend(clip_vertices)
-                all_colors.extend(clip_colors)
-
-            self._wind_vector_vertices = self._wind_vector_batch.add(
-                len(all_vertices) // 2,
-                pyglet.gl.GL_LINES,
-                None,
-                ("v2f", all_vertices),
-                ("c4B", all_colors),
+            clip_negative = (
+                neg_limit < float("inf") and half_length >= neg_limit - 1e-6
             )
 
+            handle = self._add_wind_arrow(
+                origin_x,
+                origin_y,
+                ux,
+                uy,
+                vector_length,
+                head_size,
+                clip_positive,
+                clip_negative,
+                clip_indicator_size,
+            )
+            self._wind_vector_vertices[(origin_x, origin_y)] = handle
+
+    def _draw_scale_bar(self):
+        if self._scale_vertices is not None:
+            self._scale_vertices.delete()
+            self._scale_vertices = None
+
+        pixels_per_meter = self._window.height / float(self._map_size)
+        if pixels_per_meter <= 0:
+            return
+
+        desired_pixel_target = self._window.height * 0.35
+        scale_candidates = [5, 10, 20, 25, 50, 75, 100, 150, 200, 400]
+        scale_meters = scale_candidates[0]
+        for candidate in scale_candidates:
+            if candidate * pixels_per_meter <= desired_pixel_target:
+                scale_meters = candidate
+            else:
+                break
+
+        bar_height = scale_meters * pixels_per_meter
+        max_bar_height = self._window.height - 160
+        if bar_height > max_bar_height and max_bar_height > 0:
+            bar_height = max_bar_height
+            scale_meters = bar_height / pixels_per_meter
+        bottom_y = 100
+        scale_value = max(1, int(round(scale_meters)))
+        bar_height = scale_value * pixels_per_meter
+        top_y = bottom_y + bar_height
+        x_pos = 50
+        tick_half = 8
+
+        vertices = [
+            x_pos,
+            bottom_y,
+            x_pos,
+            top_y,
+            x_pos - tick_half,
+            bottom_y,
+            x_pos + tick_half,
+            bottom_y,
+            x_pos - tick_half,
+            top_y,
+            x_pos + tick_half,
+            top_y,
+        ]
+        colors = [200, 220, 255, 255] * (len(vertices) // 2)
+
+        self._scale_vertices = self._scale_batch.add(
+            len(vertices) // 2,
+            pyglet.gl.GL_LINES,
+            None,
+            ("v2f", vertices),
+            ("c4B", colors),
+        )
+        self._scale_label.text = f"{scale_value} m"
+        self._scale_label.y = top_y + 16
     def on_draw(self):
         self._window.clear()
         self._main_batch.draw()
         self._wind_vector_batch.draw()
+        self._scale_batch.draw()
         self._force_vector_batch.draw()
 
     def update(self, dt, state_list=None, step_size=1):
+        self._draw_scale_bar()
         if self._step >= len(state_list):
             self._end_label.y = 400
         else:
@@ -334,9 +480,9 @@ class Viewer:
 
         origin = map_position(np.array(boat_position), self._map_size)
         colors = {
-            "total": (255, 0, 0, 255),
-            "sail": (0, 255, 0, 255),
-            "hull": (0, 128, 255, 255),
+            "total": (255, 120, 120, 255),
+            "sail": (110, 205, 110, 255),
+            "hull": (120, 190, 255, 255),
         }
         scale = 20.0
 
