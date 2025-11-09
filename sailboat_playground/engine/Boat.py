@@ -107,6 +107,13 @@ class Boat:
         self._rudder_foil_df = pd.read_csv(
             path.join(foils_dir, f"{self._config['rudder_foil']}.csv")
         )
+        keel_foil_name = self._config.get("keel_foil")
+        if keel_foil_name:
+            self._keel_foil_df = pd.read_csv(
+                path.join(foils_dir, f"{keel_foil_name}.csv")
+            )
+        else:
+            self._keel_foil_df = None
 
         # Compute the sail foil angle in radians for trigonometric computations
         self._sail_foil_df["alpha_rad"] = self._sail_foil_df["alpha"] * np.pi / 180
@@ -146,6 +153,17 @@ class Boat:
             + np.cos(self._rudder_foil_df["alpha_rad"]) * self._rudder_foil_df["cd"]
         )
 
+        if self._keel_foil_df is not None:
+            self._keel_foil_df["alpha_rad"] = self._keel_foil_df["alpha"] * np.pi / 180
+            self._keel_foil_df["cr"] = (
+                np.sin(self._keel_foil_df["alpha_rad"]) * self._keel_foil_df["cl"]
+                - np.cos(self._keel_foil_df["alpha_rad"]) * self._keel_foil_df["cd"]
+            )
+            self._keel_foil_df["clat"] = (
+                np.cos(self._keel_foil_df["alpha_rad"]) * self._keel_foil_df["cl"]
+                + np.cos(self._keel_foil_df["alpha_rad"]) * self._keel_foil_df["cd"]
+            )
+
         self._speed = np.array([0, 0])
         self._angular_speed = 0
         self._position = np.array([0, 0])
@@ -173,6 +191,10 @@ class Boat:
     @property
     def rudder_df(self):
         return self._rudder_foil_df
+
+    @property
+    def keel_df(self):
+        return self._keel_foil_df
 
     @property
     def config(self):

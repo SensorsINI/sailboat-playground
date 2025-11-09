@@ -73,6 +73,10 @@ The `step()` method implements the complete physics integration:
 
 __all__ = ["Manager"]
 
+import json
+import os
+import time
+
 import numpy as np
 from numpy.linalg.linalg import norm
 from sailboat_playground.engine.utils import *
@@ -90,6 +94,7 @@ class Manager:
         debug: bool = False,
         boat_heading: float = 90,
         boat_position: np.ndarray = np.array([0, 0]),
+        state_log_path: str | None = None,
     ):
         self._boat = Boat(boat_config, foils_dir)
         self._boat.set_heading(boat_heading)
@@ -100,9 +105,20 @@ class Manager:
         self._debug = debug
         self._last_force_components = {
             "sail": np.array([0.0, 0.0]),
+            "keel": np.array([0.0, 0.0]),
             "hull": np.array([0.0, 0.0]),
             "total": np.array([0.0, 0.0]),
         }
+        self._last_angular_acceleration = 0.0
+        self._step_index = 0
+        self._state_log_path = state_log_path
+        if self._state_log_path:
+            log_dir = os.path.dirname(self._state_log_path)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            with open(self._state_log_path, "w", encoding="utf-8") as _state_log:
+                _state_log.write("")
+        self._log_state("init")
         self._last_angular_acceleration = 0.0
         # Tracks the previous "side" (+1/-1) the sail was on for smooth gybe transitions.
         # By convention:
@@ -149,8 +165,10 @@ class Manager:
     @classmethod
     def compute_force(cls, rho, velocity, area, coeff):
         # Scale factor to make forces appropriate for simulation
-        # Original formula gives correct physics but too small for numerical stability
-        force_scale = 10  # Scale up forces by 10x for simulation stability
+        # Original formula gives correct physics but too small for numerical stability.
+        # Hydrodynamic forces are naturally larger due to water density; keep them closer to
+        # physical magnitudes by using a smaller scale factor in water.
+        force_scale = 10 if rho <= 10 else 1
         return force_scale * 1 / 2 * rho * (velocity**2) * area * coeff
 
     def print_current_state(self):
@@ -175,14 +193,18 @@ class Manager:
             raise Exception(
                 'Argument "ans" for Manager.step() must be a list with two values: [alpha, rudder_angle]'
             )
+        self._log_state("pre-step")
         self.apply_agent(ans[0], ans[1])
         self.print_current_state()
         total_force = np.array([0.0, 0.0])
         # 1 - Wind forces on sail
         # 1.1 - Compute apparent wind
         self.log("----------- Wind forces on sail")
-        Va = self._env.wind_speed - self._boat.speed
-        self.log(f"Va={Va}")
+        Va_raw = self._env.wind_speed - self._boat.speed
+        self.log(f"Va_raw={Va_raw}")
+        Va = self._sanitize_relative_velocity(Va_raw)
+        if not np.allclose(Va, Va_raw):
+            self.log(f"Va_clamped={Va}")
         Va_angle = compute_angle(Va) * 180 / np.pi
         # Compute the apparent wind direction relative to the boat's heading.
         # Sign convention: Positive values indicate apparent wind coming from the starboard (right) side
@@ -315,8 +337,11 @@ class Manager:
         # # 2 - Water forces on hull
         # # 2.1 - Compute apparent water current
         self.log("----------- Water forces on hull")
-        Wa = self._env.water_speed - self._boat.speed
-        self.log(f"Wa={Wa}")
+        Wa_raw = self._env.water_speed - self._boat.speed
+        self.log(f"Wa_raw={Wa_raw}")
+        Wa = self._sanitize_relative_velocity(Wa_raw)
+        if not np.allclose(Wa, Wa_raw):
+            self.log(f"Wa_clamped={Wa}")
         Wa_angle = compute_angle(Wa) * 180 / np.pi
         while Wa_angle < 0:
             Wa_angle += 360
@@ -341,6 +366,79 @@ class Manager:
         hull_force = F_WR
         # 2.3 - Apply forces
         total_force += hull_force
+
+        # 2.4 - Water forces on keel (lateral damping + yaw torque)
+        keel_force = np.array([0.0, 0.0])
+        keel_torque = 0.0
+        keel_area = self._boat.config.get("keel_area", 0.0)
+        if keel_area > 0 and self._boat.keel_df is not None and Wa_norm > 0:
+            self.log("----------- Water forces on keel")
+            keel_heading = self._boat.heading
+            keel_angle = (Wa_angle - keel_heading + 180) % 360 - 180
+            keel_alpha = int(np.clip(np.round(keel_angle), -180, 180))
+            keel_cd_row = self._boat.keel_df[self._boat.keel_df["alpha"] == keel_alpha]
+            if not keel_cd_row.empty:
+                keel_cd = keel_cd_row["cd"].values[0]
+                keel_cl = keel_cd_row["cl"].values[0]
+                if not (np.isfinite(keel_cd) and np.isfinite(keel_cl)):
+                    self.log(
+                        f"Non-finite keel coefficients (cd={keel_cd}, cl={keel_cl}); skipping keel force."
+                    )
+                else:
+                    D_norm_keel = abs(
+                        self.compute_force(
+                            constants.sea_water_rho,
+                            Wa_norm,
+                            keel_area,
+                            keel_cd,
+                        )
+                    )
+                    D_keel = norm_to_vector(D_norm_keel, Wa_angle * np.pi / 180)
+
+                    if keel_angle > 0:
+                        L_angle_keel = Wa_angle - 90
+                    else:
+                        L_angle_keel = Wa_angle + 90
+                    while L_angle_keel > 360:
+                        L_angle_keel -= 360
+                    while L_angle_keel < 0:
+                        L_angle_keel += 360
+
+                    L_norm_keel = abs(
+                        self.compute_force(
+                            constants.sea_water_rho,
+                            Wa_norm,
+                            keel_area,
+                            keel_cl,
+                        )
+                    )
+                    L_keel = norm_to_vector(L_norm_keel, L_angle_keel * np.pi / 180)
+
+                    keel_force_candidate = L_keel + D_keel
+                    if not np.all(np.isfinite(keel_force_candidate)):
+                        self.log(
+                            f"Non-finite keel force encountered ({keel_force_candidate}); skipping keel contribution."
+                        )
+                    else:
+                        keel_force = keel_force_candidate
+                        total_force += keel_force
+
+                        heading_rad = np.radians(self._boat.heading)
+                        forward = np.array([np.cos(heading_rad), np.sin(heading_rad)])
+                        keel_offset = self._boat.config.get(
+                            "keel_distance_from_com", 0.0
+                        )
+                        lever_vector_keel = keel_offset * forward
+                        keel_torque = (
+                            lever_vector_keel[0] * keel_force[1]
+                            - lever_vector_keel[1] * keel_force[0]
+                        )
+                        self.log(f"keel_force={keel_force}")
+                        self.log(f"keel_torque={keel_torque}")
+            else:
+                self.log(
+                    f"No keel foil data for alpha={keel_alpha}, skipping keel force."
+                )
 
         # 3 - Water forces on rudder
         # 3.1 - Compute water force on rudder
@@ -432,9 +530,15 @@ class Manager:
             damping_torque = 0.0
         self.log(f"damping_torque={damping_torque}")
 
-        net_torque = torque + damping_torque
+        if not np.isfinite(keel_torque):
+            self.log("Keel torque was non-finite; resetting to 0.")
+            keel_torque = 0.0
+        net_torque = torque + keel_torque + damping_torque
         self.log(f"net_torque={net_torque}")
 
+        if not np.isfinite(net_torque):
+            self.log("Non-finite net torque encountered; resetting to 0.")
+            net_torque = 0.0
         angular_acceleration_rad = net_torque / self._boat.config["moment_of_inertia"]
         angular_acceleration_deg = np.degrees(angular_acceleration_rad)
         self.log(f"angular_acceleration_deg_raw={angular_acceleration_deg}")
@@ -450,19 +554,74 @@ class Manager:
         self._last_angular_acceleration = angular_acceleration_deg
 
         # 4 - Apply all forces
+        if not np.all(np.isfinite(total_force)):
+            self.log(
+                f"Non-finite total force encountered ({total_force}); zeroing for stability."
+            )
+            total_force = np.nan_to_num(
+                total_force, nan=0.0, posinf=0.0, neginf=0.0
+            )
         self.log(f"--> Applying total_force={total_force}")
         self._boat.apply_force(total_force)
         self._last_force_components = {
             "sail": sail_force,
             "hull": hull_force,
+            "keel": keel_force,
             "total": total_force,
         }
 
         # 4 - Execute boat and environment
         self._boat.execute()
         self._env.execute()
+        self._log_state("post-step")
+        self._step_index += 1
 
     def apply_agent(self, alpha, rudder_angle):
         # Convert to integers for foil lookup (foil data has integer angle resolution)
         self._boat.set_alpha(int(alpha))
         self._boat.set_rudder_angle(int(rudder_angle))
+
+    def _sanitize_relative_velocity(self, vec: np.ndarray) -> np.ndarray:
+        """
+        Clamp apparent fluid velocities to prevent runaway force calculations.
+        """
+        MAX_RELATIVE_SPEED = 50.0  # m/s cap for apparent wind/current
+        if vec is None:
+            return np.zeros(2)
+        norm_val = np.linalg.norm(vec)
+        if not np.isfinite(norm_val) or norm_val == 0:
+            return np.zeros(2)
+        if norm_val > MAX_RELATIVE_SPEED:
+            scale = MAX_RELATIVE_SPEED / norm_val
+            return vec * scale
+        return vec
+
+    def _log_state(self, phase: str):
+        """
+        Append a JSON record of the current simulation state to the debug log file.
+        """
+        if not self._state_log_path:
+            return
+        try:
+            snapshot = {
+                "timestamp": time.time(),
+                "step": self._step_index,
+                "phase": phase,
+                "state": self.state,
+                "force_components": self._last_force_components,
+                "angular_acceleration_deg": self._last_angular_acceleration,
+            }
+            with open(self._state_log_path, "a", encoding="utf-8") as log_file:
+                log_file.write(json.dumps(snapshot, default=self._json_default) + "\n")
+        except Exception as exc:
+            self.log(f"Failed to write state log: {exc}")
+
+    @staticmethod
+    def _json_default(value):
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, (np.floating, float)):
+            return float(value)
+        if isinstance(value, (np.integer, int)):
+            return int(value)
+        return value

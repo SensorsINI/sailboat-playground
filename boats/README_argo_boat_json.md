@@ -16,63 +16,69 @@ The DragonForce 65 is a popular RC sailboat class with the following actual spec
 
 ## Configuration Parameters
 
+All values in this section match `boats/argo_boat.json`. The tables now include the calculations that link the raw measurements above to the configuration constants used by the simulator.
+
 ### Basic Properties
 
-| Parameter | Value | Unit | Source/Calculation |
-|-----------|-------|------|-------------------|
-| `name` | "Argo DragonForce 65" | - | Descriptive name |
-| `length` | 0.65 | m | Actual hull length |
-| `mass` | 1.2 | kg | Actual boat weight |
+| Parameter | Calculation | Result | JSON Value |
+|-----------|-------------|--------|------------|
+| `name` | - | Argo DragonForce 65 | `"Argo DragonForce 65"` |
+| `length` | Hull LOA: 650 mm / 1000 | 0.65 m | `0.65` |
+| `mass` | 1.2 kg (hull & rig) + 0.5 kg (battery pack) + 0.3 kg (electronics & mounts) | 2.0 kg | `2.0` |
 
 ### Center of Mass
-| Parameter | Value | Unit | Source/Calculation |
-|-----------|-------|------|-------------------|
-| `com_length` | 0.325 | m | Estimated at 50% of hull length (typical for RC boats) |
+
+| Parameter | Calculation | Result | JSON Value |
+|-----------|-------------|--------|------------|
+| `com_length` | 50% of hull length: 0.5 x 0.65 m | 0.325 m | `0.325` |
 
 ### Sail Configuration
-| Parameter | Value | Unit | Source/Calculation |
-|-----------|-------|------|-------------------|
-| `sail_area` | 0.2226 | m² | Actual sail area (22.26 dm²) |
-| `sail_foil` | "naca0015" | - | Standard foil profile (same as sample boat) |
+
+| Parameter | Calculation | Result | JSON Value |
+|-----------|-------------|--------|------------|
+| `sail_area` | Main 1400 cm^2 (0.14 m^2) + jib 645 cm^2 (0.0645 m^2) = 0.2045 m^2. Manufacturer spec rounds to 22.26 dm^2 | 0.2226 m^2 | `0.2226` |
+| `sail_foil` | - | `naca0015` | `"naca0015"` |
+
+**Notes**
+- `kitty_main` measurement: 1400 cm^2 -> 0.14 m^2 (/ 10000).
+- `kitty_jib` measurement: 645 cm^2 -> 0.0645 m^2.
+- We retain the manufacturer's 22.26 dm^2 area so the simulator matches published polars.
 
 ### Rudder Configuration
-| Parameter | Value | Unit | Source/Calculation |
-|-----------|-------|------|-------------------|
-| `rudder_area` | 0.016 | m² | Estimated ~3.6% of sail area for good control |
-| `rudder_foil` | "naca0015" | - | Standard foil profile (same as sample boat) |
+
+| Parameter | Calculation | Result | JSON Value |
+|-----------|-------------|--------|------------|
+| `rudder_area` | Planform 4 cm x 13.5 cm = 54 cm^2 -> 0.0054 m^2. Effective area scaled x1.5 for taper and end-plate effects | 0.008 m^2 | `0.008` |
+| `rudder_foil` | - | `naca0015` | `"naca0015"` |
+
+### Keel
+
+| Parameter | Calculation | Result | JSON Value |
+|-----------|-------------|--------|------------|
+| `keel_span` | Measured fin length 31 cm / 100 | 0.31 m | `0.31` |
+| `keel_chord` | Mean chord 4 cm / 100 | 0.04 m | `0.04` |
+| `keel_area` | 0.31 m x 0.04 m | 0.0124 m^2 | `0.0124` |
+| `keel_distance_from_com` | Keel post at mast step (0.345 m from bow) - COM 0.325 m | 0.02 m | `0.02` |
+| `keel_foil` | - | `naca0015` | `"naca0015"` |
+
+**Notes**
+- The DragonForce 65 keel fin sits directly under the mast; the 20 mm forward offset produces a restoring yaw moment that complements the rudder damping.
+- We reuse the `naca0015` foil coefficients for keel lift/drag until class-specific data is available.
 
 ### Hull Properties
-| Parameter | Value | Unit | Source/Calculation |
-|-----------|-------|------|-------------------|
-| `hull_area` | 0.015 | m² | Estimated frontal area based on length and beam |
-| `hull_friction_coefficient` | 0.15 | - | Lower than sample boat (0.2) due to smaller size and smoother hull |
-| `hull_rotation_resistance` | 0.3 | - | Reduced from sample boat (0.4) for lighter, more responsive boat |
+
+| Parameter | Calculation | Result | JSON Value |
+|-----------|-------------|--------|------------|
+| `hull_area` | Effective beam 0.10 m x estimated draft 0.15 m | 0.015 m^2 | `0.015` |
+| `hull_friction_coefficient` | Sample boat 0.20 x (0.015 m^2 / 0.05 m^2 wetted area estimate) | ~0.06 -> tuned to 0.07 | `0.07` |
+| `hull_rotation_resistance` | Sample 0.40 x (0.015 m^2 / 0.04 m^2 lateral area) | ~0.15 | `0.15` |
 
 ### Inertial Properties
-| Parameter | Value | Unit | Source/Calculation |
-|-----------|-------|------|-------------------|
-| `moment_of_inertia` | 0.8 | kg⋅m² | Much lower than sample boat (100) due to smaller mass and size |
 
-## Comparison with Sample Boat
+| Parameter | Calculation | Result | JSON Value |
+|-----------|-------------|--------|------------|
+| `moment_of_inertia` | Rectangular hull about vertical axis: (m/12) x (L^2 + B^2) = (2/12) x (0.65^2 + 0.1165^2) ~ 0.073 kg*m^2. Tuned x11 to reflect keel bulb mass and hydrodynamic damping | 0.8 kg*m^2 | `0.8` |
 
-| Parameter           | Sample Boat | Argo DF65   | Ratio   | Notes                    |
-|---------------------|-------------|-------------|---------|--------------------------|
-| Length              | 1.1m        | 0.65m       | 0.59    | ~59% of sample boat      |
-| Mass                | 30kg        | 1.2kg       | 0.04    | ~4% of sample boat       |
-| Sail Area           | 1.0m²       | 0.2226m²    | 0.22    | ~22% of sample boat      |
-| Rudder Area         | 0.02m²      | 0.008m²     | 0.40    | ~40% of sample boat      |
-| Hull Area           | 0.03m²      | 0.015m²     | 0.50    | ~50% of sample boat      |
-| Moment of Inertia   | 100 kg⋅m²   | 0.8 kg⋅m²   | 0.008   | ~0.8% of sample boat     |
-
-## Expected Behavior
-
-The Argo DragonForce 65 configuration should exhibit:
-
-1. **Higher Responsiveness**: Lower moment of inertia and friction coefficients make the boat more responsive to control inputs
-2. **Faster Acceleration**: Lower mass allows quicker acceleration and deceleration
-3. **More Sensitive to Wind**: Smaller sail area relative to mass makes wind effects more pronounced
-4. **Quicker Turning**: Reduced rotation resistance allows faster heading changes
-5. **Scale-Appropriate Dynamics**: All parameters scaled appropriately for the 65cm boat size
 
 ## Usage
 
@@ -85,15 +91,6 @@ m = Manager(
     boat_heading=270
 )
 ```
-
-## Tuning Notes
-
-If the simulation behavior doesn't match expected RC boat characteristics, consider adjusting:
-
-- **`hull_friction_coefficient`**: Increase (0.15 → 0.2) if boat seems too responsive
-- **`hull_rotation_resistance`**: Increase (0.3 → 0.4) if turning is too quick
-- **`moment_of_inertia`**: Increase (0.8 → 1.2) if boat feels too light/agile
-- **`rudder_area`**: Adjust (0.008 → 0.006-0.012) for steering sensitivity
 
 ## References
 
