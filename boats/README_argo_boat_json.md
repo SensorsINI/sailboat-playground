@@ -38,7 +38,7 @@ The DragonForce 65 is a popular RC sailboat class with the following actual spec
 ### Rudder Configuration
 | Parameter | Value | Unit | Source/Calculation |
 |-----------|-------|------|-------------------|
-| `rudder_area` | 0.008 | m² | Estimated ~3.6% of sail area for good control |
+| `rudder_area` | 0.016 | m² | Estimated ~3.6% of sail area for good control |
 | `rudder_foil` | "naca0015" | - | Standard foil profile (same as sample boat) |
 
 ### Hull Properties

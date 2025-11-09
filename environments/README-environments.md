@@ -11,6 +11,14 @@ This directory holds JSON files that parameterize the Sailboat Playground enviro
 - `wind_min_speed`, `wind_max_speed` *(m/s)*  
   Bounds for the nominal true-wind magnitude. The environment randomly drifts within this range each timestep, limited by `wind_max_delta_percent`.
 
+  **Tip:** To match real-world anemometer readings (usually in knots), here are some conversions:
+
+    - 5 knots ≈ 2.57 m/s  
+    - 10 knots ≈ 5.14 m/s  
+    - 15 knots ≈ 7.72 m/s  
+
+  For example, to simulate a steady 10-knot breeze, set both `wind_min_speed` and `wind_max_speed` to `5.14`.
+
 - `wind_max_delta_percent` *(% per step)*  
   Maximum fractional change allowed between consecutive wind-speed samples while outside a gust event.
 

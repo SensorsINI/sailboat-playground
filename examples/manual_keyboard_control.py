@@ -26,6 +26,8 @@ import math
 import os
 from pathlib import Path
 import sys
+import time
+SIMULATION_DT = 0.1
 
 import numpy as np
 import pyglet
@@ -54,14 +56,14 @@ from sailboat_playground.visualization.utils import map_position
 
 ARENA_SIZE_METERS = max(1.0, _boat_length_m * 60.0)
 INITIAL_POSITION = np.array([0.0, 0.0])
-INITIAL_HEADING_DEG = 220.0  # 0 = East, 90 = North, 180 = West, 270 = South
+INITIAL_HEADING_DEG = 90.0  # 0 = East, 90 = North, 180 = West, 270 = South
 INITIAL_SPEED = 1.0  # meters per second of headway at start-up
 
 RUDDER_STEP = 0.125  # matches Argo keyboard control granularity
 SAIL_STEP = 0.125
 
 MAX_RUDDER_DEG = 30.0
-MAX_SAIL_DEG = 45.0
+MAX_SAIL_DEG = 70.0
 SAIL_SIDE_DEADBAND_DEG = 5.0
 
 
@@ -90,6 +92,8 @@ class ManualKeyboardSimulation:
         self.manual_sail = -0.35  # powered-up trim with forward bias
         self.paused = False
         self.single_step_mode = False
+        self._pending_single_step = False
+        self._real_time_start = time.perf_counter()
 
         self._last_sail_side = 1.0
         self._last_relative_wind = 0.0
@@ -105,6 +109,10 @@ class ManualKeyboardSimulation:
 
     def _create_simulator(self):
         self.simulation_steps = 0
+        self.paused = False
+        self.single_step_mode = False
+        self._pending_single_step = False
+        self._real_time_start = time.perf_counter()
         self.manager = Manager(
             str(BOAT_CONFIG),
             str(ENVIRONMENT_CONFIG),
@@ -125,6 +133,7 @@ class ManualKeyboardSimulation:
         self._previous_state = None
         self._apply_wind_direction()
         self._print_initial_state()
+        self._update_step_indicator()
 
     def _print_initial_state(self):
         state = self.manager.state
@@ -165,6 +174,8 @@ class ManualKeyboardSimulation:
                 self.paused = False
             else:
                 self.paused = not self.paused
+            self._pending_single_step = False
+            self._update_step_indicator()
         elif symbol == pyglet.window.key.R:
             self._create_simulator()
         elif symbol == pyglet.window.key.W:
@@ -175,6 +186,8 @@ class ManualKeyboardSimulation:
             if not self.single_step_mode:
                 self.single_step_mode = True
                 self.paused = True
+            self._pending_single_step = True
+            self._update_step_indicator()
             self.update_simulation(0.0)
         elif symbol in (pyglet.window.key.Q, pyglet.window.key.ESCAPE):
             pyglet.app.exit()
@@ -206,6 +219,16 @@ class ManualKeyboardSimulation:
 
     def update_simulation(self, dt):
         if self.paused:
+            if self.single_step_mode and self._pending_single_step:
+                pass
+            else:
+                self._update_step_indicator()
+                return
+
+        if self.single_step_mode and self._pending_single_step:
+            # Allow one step while paused when in single-step mode.
+            self.paused = True
+        elif self.paused:
             return
 
         agent_state = self.manager.agent_state
@@ -214,20 +237,9 @@ class ManualKeyboardSimulation:
         if math.isnan(relative_wind):
             relative_wind = 0.0
 
-        if abs(relative_wind) < SAIL_SIDE_DEADBAND_DEG:
-            sail_side = self._last_sail_side
-        else:
-            sail_side = 1.0 if relative_wind >= 0.0 else -1.0
-        if sail_side == 0.0:
-            sail_side = 1.0
-
-        self._last_sail_side = sail_side
-        self._last_relative_wind = relative_wind
-
         sheet_fraction = clamp(0.5 * (self.manual_sail + 1.0), 0.0, 1.0)
-        sail_angle_deg = sail_side * sheet_fraction * MAX_SAIL_DEG
+        sail_angle_deg = sheet_fraction * MAX_SAIL_DEG
         rudder_angle_deg = clamp(self.manual_rudder, -1.0, 1.0) * MAX_RUDDER_DEG
-
         self.manager.step([int(sail_angle_deg), int(rudder_angle_deg)])
         full_state = self.manager.state
 
@@ -235,6 +247,8 @@ class ManualKeyboardSimulation:
 
         self._state_history.append(full_state)
         self.simulation_steps += 1
+        self._pending_single_step = False
+        self._update_step_indicator()
 
     def _update_viewer(self, state):
         boat_position = state["boat_position"]
@@ -271,6 +285,20 @@ class ManualKeyboardSimulation:
     # ------------------------------------------------------------------
     # Diagnostics
     # ------------------------------------------------------------------
+    def _update_step_indicator(self):
+        elapsed = max(time.perf_counter() - self._real_time_start, 1e-6)
+        simulated_time = self.simulation_steps * SIMULATION_DT
+        real_time_factor = None
+        if elapsed > 0:
+            real_time_factor = simulated_time / elapsed
+        self.viewer.set_step_indicator(
+            self.simulation_steps,
+            self.paused,
+            self.single_step_mode,
+            simulated_time,
+            real_time_factor,
+        )
+
     def print_status(self, dt):
         if not self._state_history:
             return

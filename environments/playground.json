@@ -1,7 +1,7 @@
 {
     "name": "Playground environment",
-    "wind_min_speed": 4,
-    "wind_max_speed": 4,
+    "wind_min_speed": 5.14,
+    "wind_max_speed": 5.14,
     "wind_max_delta_percent": 0,
     "wind_gust_probability": 0,
     "wind_gust_min_duration": 0,
@@ -9,7 +9,7 @@
     "wind_gust_min_speed": 9,
     "wind_gust_max_speed": 9,
     "wind_gust_max_delta_percent": 0,
-    "wind_direction": 220,
+    "wind_direction": 0,
     "current_speed": 0,
     "current_direction": 225
 }

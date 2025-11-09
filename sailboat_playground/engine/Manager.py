@@ -104,6 +104,13 @@ class Manager:
             "total": np.array([0.0, 0.0]),
         }
         self._last_angular_acceleration = 0.0
+        # Tracks the previous "side" (+1/-1) the sail was on for smooth gybe transitions.
+        # By convention:
+        #   +1 = sail is out on the starboard ("right") side – i.e., wind is from port/left.
+        #   -1 = sail is out on the port ("left") side – i.e., wind is from starboard/right.
+        self._last_sail_sign = 1.0
+        # Deadband (in degrees) for sail side changes, helps prevent rapid switching near dead downwind.
+        self._sail_side_deadband = 5.0
 
     def log(self, *args, **kwargs):
         if self._debug:
@@ -177,14 +184,64 @@ class Manager:
         Va = self._env.wind_speed - self._boat.speed
         self.log(f"Va={Va}")
         Va_angle = compute_angle(Va) * 180 / np.pi
-        self._apparent_wind_direction = Va_angle - self._boat.heading
+        # Compute the apparent wind direction relative to the boat's heading.
+        # Sign convention: Positive values indicate apparent wind coming from the starboard (right) side
+        # of the boat (relative to heading), negative from port (left) side.
+        apparent_wind_direction = Va_angle - self._boat.heading
+        while apparent_wind_direction < -180:
+            apparent_wind_direction += 360
+        while apparent_wind_direction > 180:
+            apparent_wind_direction -= 360
+        self._apparent_wind_direction = apparent_wind_direction
         global_sail_angle = self._boat.heading + self._boat.alpha
         while global_sail_angle < 0:
             global_sail_angle += 360
         while global_sail_angle > 360:
             global_sail_angle -= 360
         self.log(f"global_sail_angle={global_sail_angle}")
-        alpha = Va_angle - global_sail_angle + 180
+        # Explanation:
+        # "alpha" here represents the angle of attack of the sail, i.e., the angle between the apparent wind direction (the wind as perceived by the moving boat)
+        # and the orientation of the sail itself (in global coordinates). The sail's effectiveness depends critically on this angle.
+        #
+        # Logic:
+        # 1. Retrieve the commanded sail angle (relative to the boat), and determine its magnitude and sign.
+        # 2. If the commanded sail sign is zero (i.e., no trim), persist the previous sail sign to maintain sail side.
+        # 3. Determine which side of the boat the sail should be on:
+        #    - If the apparent wind is almost aligned with the boat's axis (inside a deadband), keep the current/commanded sign.
+        #    - Otherwise, set sail to opposite side: negative sign if apparent wind comes from starboard, positive if from port.
+        #    This ensures the sail always falls on the appropriate downwind side for correct physics when tacking/jibing.
+        # 4. Persist this sail "side" for the next step.
+        # 5. Reapply the sign to the magnitude to form the adjusted (possibly flipped) sail alpha.
+        # 6. If an adjustment was made, update the boat's alpha.
+        # 7. Recompute the global sail angle with the possibly-updated alpha.
+        # 8. Finally, compute the angle of attack (alpha): difference between apparent wind angle and global sail angle.
+        alpha_cmd = self._boat.alpha  # The sail trim angle as set by agent [-max, +max], in degrees, relative to boat heading
+        alpha_magnitude = abs(alpha_cmd)
+        commanded_sign = np.sign(alpha_cmd) if alpha_magnitude > 0 else 0.0
+        if commanded_sign == 0:
+            commanded_sign = self._last_sail_sign
+        # Determine which side to put the sail on:
+        # - If apparent wind direction is within a deadband, stick with current sign.
+        # - Otherwise, flip to correct side based on the sign of the apparent wind direction:
+        #   negative apparent wind means wind is coming from *port* (left) side: set sail on starboard (right): +1.0
+        #   positive apparent wind means wind is coming from *starboard* (right): set sail on port (left): -1.0
+        if abs(self._apparent_wind_direction) < self._sail_side_deadband:
+            desired_sign = commanded_sign
+        else:
+            desired_sign = -1.0 if self._apparent_wind_direction >= 0 else 1.0
+        self._last_sail_sign = desired_sign
+        adjusted_alpha = desired_sign * alpha_magnitude
+        if adjusted_alpha != self._boat.alpha:
+            self.log(f"Adjusted sail alpha from {self._boat.alpha} to {adjusted_alpha}")
+            self._boat.set_alpha(int(adjusted_alpha))
+            global_sail_angle = self._boat.heading + self._boat.alpha
+            while global_sail_angle < 0:
+                global_sail_angle += 360
+            while global_sail_angle > 360:
+                global_sail_angle -= 360
+            self.log(f"global_sail_angle (adjusted)={global_sail_angle}")
+        # Final sail *angle of attack* (alpha, in degrees) is the difference between apparent wind angle and sail orientation in global frame
+        alpha = Va_angle - global_sail_angle
         while alpha < -180:
             alpha += 360
         while alpha > 180:
@@ -293,11 +350,14 @@ class Manager:
             global_rudder_angle += 360
         while global_rudder_angle > 360:
             global_rudder_angle -= 360
-        rudder_angle = Wa_angle - global_rudder_angle + 180
-        while rudder_angle < -180:
-            rudder_angle += 360
-        while rudder_angle > 180:
-            rudder_angle -= 360
+        # Compute the angle of attack ("alpha") of the rudder relative to the apparent water flow ("Wa").
+        # Wa_angle: direction of apparent water flow (relative to East, degrees, 0-360), i.e., where the water is moving FROM, in the global frame.
+        # global_rudder_angle: rudder's direction in global frame (boat heading + rudder angle), degrees, 0-360.
+        # The 'rudder_angle' here is the angle between the incoming water and the rudder:
+        #   - Positive: water hits the starboard (right) side of the rudder (rudder to port).
+        #   - Negative: water hits the port (left) side of the rudder (rudder to starboard).
+        # This value is wrapped to [-180, 180] for consistent foil lookup.
+        rudder_angle = (Wa_angle - global_rudder_angle + 180) % 360 - 180
         D_norm = abs(
             self.compute_force(
                 constants.sea_water_rho,
@@ -309,8 +369,20 @@ class Manager:
             )
         )
         self.log(f"D_norm={D_norm}")
-        D_angle = Va_angle
+        # Compute the direction of the rudder drag ("D") force.
+        # Explanation:
+        #   - The drag force on the rudder always acts in the same direction as the 
+        #     oncoming water flow relative to the rudder (i.e., directly opposes the water's movement 
+        #     over the rudder surface).
+        #   - Here, D_angle is set to Wa_angle, which is the global angle (degrees, 0-360, trigonometric convention)
+        #     from which the apparent water is flowing. This means the drag vector points
+        #     exactly opposite to the water's incoming direction as experienced by the rudder.
+        #   - This is necessary because drag always resists the relative fluid motion: the rudder's drag
+        #     does not depend on the rudder's orientation, only on the velocity (Wa) *direction* and magnitude.
+        D_angle = Wa_angle
         self.log(f"D_angle={D_angle}")
+        # Convert D_angle from degrees to radians for vector construction,
+        # then create the force vector of magnitude D_norm in direction D_angle.
         D = norm_to_vector(D_norm, D_angle * np.pi / 180)
         self.log(f"D={D}")
         L_norm = abs(
@@ -337,34 +409,45 @@ class Manager:
         self.log(f"L={L}")
         F_T = L + D
         self.log(f"F_T={F_T}")
-        F_T_norm = np.linalg.norm(F_T)
-        self.log(f"F_T_norm={F_T_norm}")
-        # 3.2 - Compute hull rotation resistance
-        F_WR_norm = abs(
-            self.compute_force(
+        # 3.2 - Compute torque via lever arm cross product (rudder behind COM)
+        heading_rad = np.radians(self._boat.heading)
+        lever_arm = self._boat.config["length"] - self._boat.config["com_length"]
+        forward = np.array([np.cos(heading_rad), np.sin(heading_rad)])
+        lever_vector = -lever_arm * forward
+        torque = lever_vector[0] * F_T[1] - lever_vector[1] * F_T[0]
+        self.log(f"torque={torque}")
+
+        # 3.3 - Apply rotational damping based on angular-induced water flow
+        angular_speed_rad = np.radians(self._boat.angular_speed)
+        if abs(angular_speed_rad) > 0:
+            tangential_speed = abs(angular_speed_rad) * lever_arm
+            damping_force = self.compute_force(
                 constants.sea_water_rho,
-                self._boat.angular_speed,
+                tangential_speed,
                 self._boat.config["hull_area"],
                 self._boat.config["hull_rotation_resistance"],
             )
-        )
-        self.log(f"F_WR_norm={F_WR_norm}")
-        # 3.3 - Compute torque and angular acceleration
-        angular_acceleration_signal = 1 if self._boat.rudder_angle < 0 else -1
-        self.log(f"angular_acceleration_signal={angular_acceleration_signal}")
-        torque = (F_T_norm - F_WR_norm) * (
-            self._boat.config["length"] - self._boat.config["com_length"]
-        )
-        self.log(f"torque={torque}")
-        angular_acceleration = (
-            torque
-            / self._boat.config["moment_of_inertia"]
-            * angular_acceleration_signal
-        )
-        self.log(f"angular_acceleration={angular_acceleration}")
-        # 3.4 - Apply angular acceleration
-        self._boat.apply_angular_acceleration(angular_acceleration)
-        self._last_angular_acceleration = angular_acceleration
+            damping_torque = -np.sign(angular_speed_rad) * damping_force * lever_arm
+        else:
+            damping_torque = 0.0
+        self.log(f"damping_torque={damping_torque}")
+
+        net_torque = torque + damping_torque
+        self.log(f"net_torque={net_torque}")
+
+        angular_acceleration_rad = net_torque / self._boat.config["moment_of_inertia"]
+        angular_acceleration_deg = np.degrees(angular_acceleration_rad)
+        self.log(f"angular_acceleration_deg_raw={angular_acceleration_deg}")
+
+        MAX_ANGULAR_ACCEL = 720.0  # deg/s^2 physical safety limit
+        if angular_acceleration_deg > MAX_ANGULAR_ACCEL:
+            angular_acceleration_deg = MAX_ANGULAR_ACCEL
+        elif angular_acceleration_deg < -MAX_ANGULAR_ACCEL:
+            angular_acceleration_deg = -MAX_ANGULAR_ACCEL
+        self.log(f"angular_acceleration_deg_clamped={angular_acceleration_deg}")
+
+        self._boat.apply_angular_acceleration(angular_acceleration_deg)
+        self._last_angular_acceleration = angular_acceleration_deg
 
         # 4 - Apply all forces
         self.log(f"--> Applying total_force={total_force}")

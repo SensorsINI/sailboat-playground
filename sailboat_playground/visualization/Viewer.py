@@ -130,6 +130,18 @@ class Viewer:
             font_size=15,
         )
 
+        STATUS_X = 40
+        self._status_text = pyglet.text.Label(
+            text="Step 0 | t=0.0 s",
+            x=STATUS_X,
+            y=680,
+            anchor_x="left",
+            anchor_y="center",
+            batch=self._main_batch,
+            font_size=12,
+            color=(240, 245, 255, 255),
+        )
+
         self._sailboat = None
         self._objects = []
 
@@ -473,6 +485,27 @@ class Viewer:
 
         # Run
         pyglet.app.run()
+
+    def set_step_indicator(
+        self,
+        step: int,
+        paused: bool,
+        single_step: bool,
+        sim_time_s: float,
+        real_time_factor: float | None,
+    ) -> None:
+        status = f"Step {step} | t={sim_time_s:.1f} s"
+        if real_time_factor is not None and real_time_factor > 0:
+            if real_time_factor >= 1.0:
+                status += f" | {real_time_factor:.1f}x"
+            else:
+                status += f" | {1.0 / real_time_factor:.1f}/"
+        if paused:
+            status += " (paused"
+            if single_step:
+                status += ", single-step"
+            status += ")"
+        self._status_text.text = status
 
     def draw_force_vectors(self, boat_position, forces):
         if forces is None:

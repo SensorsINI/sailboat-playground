@@ -218,10 +218,11 @@ class Boat:
 
     def apply_angular_acceleration(self, accel: float):
         self._angular_speed += accel * get_time_delta()
-        if self._angular_speed > 360 / get_time_delta():
-            self._angular_speed = 360 / get_time_delta()
-        if self._angular_speed < -360 / get_time_delta():
-            self._angular_speed = -360 / get_time_delta()
+        max_rate = self._config.get("max_angular_speed_deg_s", 90.0)
+        if self._angular_speed > max_rate:
+            self._angular_speed = max_rate
+        if self._angular_speed < -max_rate:
+            self._angular_speed = -max_rate
 
     def execute(self):
         self._currentTime += get_time_delta()
