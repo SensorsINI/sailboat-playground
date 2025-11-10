@@ -97,6 +97,7 @@ class ManualKeyboardSimulation:
 
         self._last_sail_side = 1.0
         self._last_relative_wind = 0.0
+        self._last_status_step = -1
 
         self._state_history = []
 
@@ -134,6 +135,7 @@ class ManualKeyboardSimulation:
         self._apply_wind_direction()
         self._print_initial_state()
         self._update_step_indicator()
+        self._last_status_step = -1
 
     def _print_initial_state(self):
         state = self.manager.state
@@ -302,6 +304,9 @@ class ManualKeyboardSimulation:
     def print_status(self, dt):
         if not self._state_history:
             return
+        if self.simulation_steps == self._last_status_step:
+            return
+        self._last_status_step = self.simulation_steps
 
         latest = self._state_history[-1]
         boat_velocity = latest["boat_speed"]
@@ -310,16 +315,30 @@ class ManualKeyboardSimulation:
             boat_velocity, latest["boat_heading"]
         )
         forces = getattr(self.manager, "_last_force_components", None)
-        total_force = np.linalg.norm(forces["total"]) if forces else 0.0
+        sail_force = (
+            np.linalg.norm(forces.get("sail", [0.0, 0.0])) if forces else 0.0
+        )
+        hull_force = (
+            np.linalg.norm(forces.get("hull", [0.0, 0.0])) if forces else 0.0
+        )
+        hull_lat_force = (
+            np.linalg.norm(forces.get("hull_lateral", [0.0, 0.0]))
+            if forces
+            else 0.0
+        )
+        keel_force = (
+            np.linalg.norm(forces.get("keel", [0.0, 0.0])) if forces else 0.0
+        )
+        total_force = np.linalg.norm(forces.get("total", [0.0, 0.0])) if forces else 0.0
         angular_accel = getattr(self.manager, "_last_angular_acceleration", 0.0)
         print(
-            f"Step {self.simulation_steps:4d} | "
-            f"Heading {latest['boat_heading']:.1f}° | "
-            f"Speed {speed:.2f} m/s | "
-            f"Fwd {forward_speed:+.2f} m/s | Slip {lateral_speed:+.2f} m/s | "
-            f"Wind rel {self._last_relative_wind:.1f}° | "
+            f"Step {self.simulation_steps:4d} | Heading {latest['boat_heading']:.1f}° | "
+            f"Speed {speed:6.2f} m/s (Fwd {forward_speed:+6.2f}, Slip {lateral_speed:+6.2f}) | "
+            f"Wind rel {self._last_relative_wind:+6.1f}° | "
             f"Sail cmd {self.manual_sail:+.2f} | Rudder cmd {self.manual_rudder:+.2f} | "
-            f"|F| {total_force:.2f} N | α_ddot {angular_accel:.3f}"
+            f"Fsail {sail_force:7.2f} N | Fhull {hull_force:7.2f} N | "
+            f"Fhull⊥ {hull_lat_force:7.2f} N | Fkeel {keel_force:7.2f} N | "
+            f"|F_total| {total_force:7.2f} N | α_ddot {angular_accel:8.3f}"
         )
 
     def run(self):

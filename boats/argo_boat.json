@@ -6,14 +6,17 @@
     "sail_area": 0.2226,
     "sail_foil": "naca0015",
     "rudder_area": 0.008,
-    "rudder_foil": "naca0015",
+    "rudder_foil": "naca0006_rudder",
     "hull_area": 0.015,
     "hull_friction_coefficient": 0.07,
     "hull_rotation_resistance": 0.15,
+    "hull_side_area": 0.06,
+    "hull_side_coefficient": 0.9,
+    "hull_side_center_from_com": 0.03,
     "moment_of_inertia": 0.8,
     "keel_span": 0.31,
     "keel_chord": 0.04,
     "keel_area": 0.0124,
     "keel_distance_from_com": 0.02,
-    "keel_foil": "naca0015"
+    "keel_foil": "naca0006"
 }

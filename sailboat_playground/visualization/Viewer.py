@@ -56,7 +56,7 @@ class Viewer:
         self._legend_total = pyglet.text.Label(
             text="Total Force",
             x=400,
-            y=760,
+            y=780,
             anchor_x="center",
             anchor_y="center",
             color=(255, 120, 120, 255),
@@ -66,7 +66,7 @@ class Viewer:
         self._legend_sail = pyglet.text.Label(
             text="Sail Force",
             x=400,
-            y=740,
+            y=760,
             anchor_x="center",
             anchor_y="center",
             color=(110, 205, 110, 255),
@@ -76,7 +76,7 @@ class Viewer:
         self._legend_hull = pyglet.text.Label(
             text="Hull Drag",
             x=400,
-            y=720,
+            y=740,
             anchor_x="center",
             anchor_y="center",
             color=(120, 190, 255, 255),
@@ -86,10 +86,30 @@ class Viewer:
         self._legend_torque = pyglet.text.Label(
             text="Torque (CW+/CCW-)",
             x=400,
-            y=700,
+            y=680,
             anchor_x="center",
             anchor_y="center",
             color=(255, 165, 0, 255),
+            font_size=12,
+            batch=self._main_batch,
+        )
+        self._legend_hull_lat = pyglet.text.Label(
+            text="Hull Lateral",
+            x=400,
+            y=720,
+            anchor_x="center",
+            anchor_y="center",
+            color=(180, 120, 255, 255),
+            font_size=12,
+            batch=self._main_batch,
+        )
+        self._legend_keel = pyglet.text.Label(
+            text="Keel Force",
+            x=400,
+            y=700,
+            anchor_x="center",
+            anchor_y="center",
+            color=(230, 190, 80, 255),
             font_size=12,
             batch=self._main_batch,
         )
@@ -134,7 +154,7 @@ class Viewer:
         self._status_text = pyglet.text.Label(
             text="Step 0 | t=0.0 s",
             x=STATUS_X,
-            y=680,
+            y=640,
             anchor_x="left",
             anchor_y="center",
             batch=self._main_batch,
@@ -516,6 +536,8 @@ class Viewer:
             "total": (255, 120, 120, 255),
             "sail": (110, 205, 110, 255),
             "hull": (120, 190, 255, 255),
+            "hull_lateral": (180, 120, 255, 255),
+            "keel": (230, 190, 80, 255),
         }
         scale = 20.0
 
